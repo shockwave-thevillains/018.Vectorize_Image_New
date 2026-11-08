@@ -86,7 +86,7 @@ async function vectorize(file, o, progress, aiMask) {
   // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
   // Gradien: garis tipis dideteksi dulu, dihapus dari gambar (diisi warna
   // latarnya), lalu digambar ulang sebagai garis vektor bertebal seragam.
-  const thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh) : [];
+  let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh) : [];
   if (thinLines.length) g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   if (o.mode === 'gradient') {
     // Detail kecil yang kontras (garis tipis, titik, huruf) dilindungi: bobotnya
@@ -98,6 +98,30 @@ async function vectorize(file, o, progress, aiMask) {
     // Gradasi lebar (cahaya lampu, dinding) dihaluskan berjangkauan jauh tanpa
     // menyeberangi tepi kontras → pita warna nanti berkontur mulus.
     domainTransform(src, sw, sh, Math.max(4, Math.min(sw, sh) / 90), 45, 3);
+    for (let i = 0, p = 0; i < keep.length; i++, p += 4) {
+      const m = keep[i];
+      if (!m) continue;
+      src[p] += m * (orig[p] - src[p]); src[p + 1] += m * (orig[p + 1] - src[p + 1]); src[p + 2] += m * (orig[p + 2] - src[p + 2]);
+    }
+    g0.putImageData(new ImageData(src, sw, sh), 0, 0);
+  }
+  // Warna + Rapikan: grain/tekstur bintik dan derau JPEG diratakan dengan
+  // penghalusan yang menjaga tepi, sebelum palet (seperti vectorizer.ai yang
+  // "membaca" maksud gambar, bukan tiap bintik). Detail kontras dilindungi.
+  const clean = o.mode === 'color' && o.clean !== false;
+  const raw = clean && o.lineStrokes !== false ? new Uint8ClampedArray(src) : null;
+  if (clean) {
+    const keep = detailMask(src, sw, sh, 30, 40);
+    const orig = new Uint8ClampedArray(src);
+    for (let k = 0; k < 2; k++) bilateral(src, sw, sh, 2, 1.6, 13);
+    // Hanya grain yang diratakan: piksel di tepi nyata (selisih tengah besar
+    // pada gambar asli) dikembalikan utuh, jadi outline tipis tidak memudar.
+    for (let y = 1; y < sh - 1; y++) {
+      for (let x = 1, p = (y * sw + 1) * 4; x < sw - 1; x++, p += 4) {
+        if (diff(orig, p - 4, p + 4) + diff(orig, p - sw * 4, p + sw * 4) <= 110) continue;
+        src[p] = orig[p]; src[p + 1] = orig[p + 1]; src[p + 2] = orig[p + 2];
+      }
+    }
     for (let i = 0, p = 0; i < keep.length; i++, p += 4) {
       const m = keep[i];
       if (!m) continue;
@@ -120,6 +144,10 @@ async function vectorize(file, o, progress, aiMask) {
       if (n) { p.r = clamp255(r / n); p.g = clamp255(gg / n); p.b = clamp255(b / n); }
     }
   }
+  // Warna + Rapikan, gambar kaya warna/tekstur (palet >= 24): garis tipis yang
+  // pecah di isian ditambahkan sebagai stroke rata di atasnya. Isian tidak
+  // diubah (topologi & putih tetap). Ilustrasi flat: garisnya sudah tegas.
+  if (raw && pal.length >= 24) thinLines = detectLines(raw, sw, sh);
   progress(0.06, 'palet');
 
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
@@ -161,13 +189,17 @@ async function vectorize(file, o, progress, aiMask) {
   const order = new Int32Array(N);
   const comp = new Int32Array(N);
   // Gradien: noise JPEG antar tingkat warna yang berdekatan dibuang lebih tegas.
-  const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : 1) * s * s));
-  // Gradien: bintik kecil yang kontras (titik grid, bintang) dipertahankan.
-  despeckle(lab, W, H, minA, comp, order, pal, o.mode === 'gradient' ? { de: 22, min: Math.max(2, Math.round(0.8 * s * s)) } : null);
+  const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : clean ? 2.5 : 1) * s * s));
+  // Gradien / Rapikan: bintik kecil yang kontras (titik grid, bintang, butir nasi)
+  // dipertahankan; bintik berkontras rendah (tekstur, derau) dilebur.
+  despeckle(lab, W, H, minA, comp, order, pal, o.mode === 'gradient' || clean ? { de: 22, min: Math.max(2, Math.round((clean ? 3 : 0.8) * s * s)) } : null);
   if (o.mode === 'gradient') {
     mergeWeak(lab, data, W, H, pal, s, comp, order);
     dropSlivers(lab, W, H, pal, s, comp, order);
   }
+  // Rapikan: bentuk sempit berwarna campuran dua tetangganya (sisa antialias di
+  // ujung goresan, pinggiran garis) dilebur ke tetangga yang paling mirip.
+  if (clean) dropSlivers(lab, W, H, pal, s, comp, order, 2.2, 0.2, 6);
   progress(0.45, 'bersih');
 
   // Putih → transparan.
@@ -254,6 +286,7 @@ async function vectorize(file, o, progress, aiMask) {
   progress(0.55, 'region');
 
   const feats = whiteFeatures(lab, W, H, comp, order, info, isWhite, pal, s);
+  o._pal = pal;
   const out = traceAll(lab, comp, info, W, H, s, o, whiteK, (p) => progress(0.55 + p * 0.43, 'kurva'));
   for (const [c, f] of feats) {
     const r = out.compToReg[c];
@@ -692,6 +725,9 @@ function buildPalette(px, w, h, o) {
   const acnt = new Float64Array(32768);
   const ar = new Float64Array(32768), ag = new Float64Array(32768), ab = new Float64Array(32768);
   const FT = 36;
+  // Histogram piksel "sangat rata" (selisih <= 12 ke tiap tetangga) untuk uji
+  // lembah: pita tepi yang buram tidak masuk, gradasi lebar yang landai masuk.
+  const strict = o.mode === 'color' && o.clean !== false ? new Float64Array(32768) : null;
   let flat = 0, all = 0;
 
   for (let y = 0; y < h; y++) {
@@ -715,6 +751,11 @@ function buildPalette(px, w, h, o) {
       if (y > 0) isFlat = isFlat && diff(px, p, p - w * 4) <= FT;
       if (y < h - 1) isFlat = isFlat && diff(px, p, p + w * 4) <= FT;
       if (isFlat) { cnt[key]++; sr[key] += r; sg[key] += g; sb[key] += b; flat++; }
+      if (strict) {
+        const ST = 12;
+        if ((x === 0 || diff(px, p, p - 4) <= ST) && (x === w - 1 || diff(px, p, p + 4) <= ST)
+          && (y === 0 || diff(px, p, p - w * 4) <= ST) && (y === h - 1 || diff(px, p, p + w * 4) <= ST)) strict[key]++;
+      }
     }
   }
   // Gambar foto/gradien penuh: tidak cukup piksel rata → pakai semua.
@@ -736,6 +777,31 @@ function buildPalette(px, w, h, o) {
   const isW = (L, A, B) => L >= 96 && Math.hypot(A, B) < 5;
   const farW = (L, A, B) => L < 94 || Math.hypot(A, B) > 7;
   const sepW = (L1, A1, B1, L2, A2, B2) => (isW(L1, A1, B1) && farW(L2, A2, B2)) || (isW(L2, A2, B2) && farW(L1, A1, B1));
+  // Warna + Rapikan: dua warna mirip tetap terpisah bila di antara keduanya
+  // nyaris tidak ada piksel rata berwarna peralihan ("lembah" di histogram):
+  // itu dua bidang datar yang memang berbeda (butir nasi di atas nasi), bukan
+  // gradasi atau derau (yang peralihannya rata dan padat).
+  const ec = !grad && o.mode === 'color' && o.clean !== false;
+  const binOf = (r, g, b) => ((Math.max(0, Math.min(255, r)) >> 3) << 10) | ((Math.max(0, Math.min(255, g)) >> 3) << 5) | (Math.max(0, Math.min(255, b)) >> 3);
+  let sumStrict = 0;
+  if (strict) for (let k = 0; k < 32768; k++) sumStrict += strict[k];
+  const valleyIn = (D, p, q) => {
+    const ka = binOf(p.r, p.g, p.b), kb = binOf(q.r, q.g, q.b);
+    const peak = Math.min(D[ka], D[kb]);
+    // Hanya bidang yang cukup luas: varian kecil (pinggiran outline) tidak dihitung.
+    if (peak < Math.max(24, (D === C ? total : sumStrict) * 0.0002)) return false;
+    let low = Infinity, used = 0;
+    for (let t = 0.15; t < 0.9; t += 0.1) {
+      const k = binOf(p.r + t * (q.r - p.r), p.g + t * (q.g - p.g), p.b + t * (q.b - p.b));
+      if (k === ka || k === kb) continue;
+      used++;
+      if (D[k] < low) low = D[k];
+    }
+    return used > 0 && low < 0.12 * peak;
+  };
+  // Histogram "sangat rata" untuk bidang lebar; histogram rata biasa untuk
+  // bidang tipis (outline) yang hampir tidak punya piksel sangat rata.
+  const valley = (p, q) => (strict && valleyIn(strict, p, q)) || valleyIn(C, p, q);
   let cl = [];
   for (const k of bins) {
     const L = bl[k * 3], A = bl[k * 3 + 1], Bb = bl[k * 3 + 2];
@@ -746,7 +812,9 @@ function buildPalette(px, w, h, o) {
       if (d < bd && !sepW(c.L / c.n, c.A / c.n, c.B / c.n, L, A, Bb)) { bd = d; best = j; }
     }
     const n = C[k];
-    if (best >= 0 && Math.sqrt(bd) < md) {
+    // Rapikan: bin yang dipisahkan "lembah" dari pusat klaster (bidang datar lain
+    // yang mirip, mis. butir nasi putih di atas nasi) membuka klaster sendiri.
+    if (best >= 0 && Math.sqrt(bd) < md && !(ec && bd > 16 && valley({ r: cl[best].r / cl[best].n, g: cl[best].g / cl[best].n, b: cl[best].b / cl[best].n }, { r: R[k] / C[k], g: G[k] / C[k], b: B[k] / C[k] }))) {
       const c = cl[best];
       c.n += n; c.L += L * n; c.A += A * n; c.B += Bb * n; c.r += R[k]; c.g += G[k]; c.b += B[k];
     } else {
@@ -788,7 +856,7 @@ function buildPalette(px, w, h, o) {
         const d2 = (P[i].L - P[j].L) ** 2 + (P[i].A - P[j].A) ** 2 + (P[i].B - P[j].B) ** 2;
         const cost = (d2 * P[i].n * P[j].n) / (P[i].n + P[j].n);
         if (cost < wc) { wc = cost; wi = i; wj = j; }
-        if (d2 < mdist) { mdist = d2; mi = i; mj = j; }
+        if (d2 < mdist && !(ec && d2 < md * md && valley(P[i], P[j]))) { mdist = d2; mi = i; mj = j; }
       }
     }
     // Varian minor: warna kecil yang cukup dekat dengan warna dominan
@@ -799,7 +867,7 @@ function buildPalette(px, w, h, o) {
         const ratio = Math.min(P[i].n, P[j].n) / Math.max(P[i].n, P[j].n);
         if (ratio > 0.2 || sepW(P[i].L, P[i].A, P[i].B, P[j].L, P[j].A, P[j].B)) continue;
         const d = Math.sqrt((P[i].L - P[j].L) ** 2 + (P[i].A - P[j].A) ** 2 + (P[i].B - P[j].B) ** 2);
-        if (d < md * 1.6 && d < vd) { vd = d; vi = i; vj = j; }
+        if (d < md * 1.6 && d < vd && !(ec && valley(P[i], P[j]))) { vd = d; vi = i; vj = j; }
       }
     }
     let a, b;
@@ -826,6 +894,8 @@ function buildPalette(px, w, h, o) {
       for (let i = 0; i < P.length; i++) {
         if (i === k) continue;
         const b = P[i];
+        // Rembesan selalu jauh lebih sedikit daripada warna aslinya.
+        if (c.n > 0.5 * b.n) continue;
         const vx = K[0] - b.r, vy = K[1] - b.g, vz = K[2] - b.b, vv = vx * vx + vy * vy + vz * vz;
         if (vv < 1) continue;
         const t = ((c.r - b.r) * vx + (c.g - b.g) * vy + (c.b - b.b) * vz) / vv;
@@ -863,6 +933,17 @@ function buildPalette(px, w, h, o) {
   for (let k = P.length - 1; k >= 0 && P.length > 2; k--) {
     const c = P[k];
     if (c.n > totalN * 0.02) continue;
+    // Rapikan: warna dengan banyak piksel "sangat rata" adalah bidang sungguhan
+    // (butir abu-abu, bayangan kecil), bukan peralihan antialias.
+    if (strict) {
+      const r0 = clamp255(c.r) >> 3, g0 = clamp255(c.g) >> 3, b0 = clamp255(c.b) >> 3;
+      let m = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dg = -1; dg <= 1; dg++) for (let db = -1; db <= 1; db++) {
+        const r = r0 + dr, g = g0 + dg, b = b0 + db;
+        if (r >= 0 && g >= 0 && b >= 0 && r < 32 && g < 32 && b < 32) m += strict[(r << 10) | (g << 5) | b];
+      }
+      if (m >= 0.5 * c.n) continue;
+    }
     let mixed = false;
     for (let i = 0; i < P.length && !mixed; i++) {
       for (let j = i + 1; j < P.length && !mixed; j++) {
@@ -1028,6 +1109,11 @@ function assignLabels(data, W, H, s, pal, o) {
     if (o._orient) orientedMajority(lab, W, H, s, o._orient, Math.max(3, Math.round(3 * s)), 2);
   }
   else if (o.lineThreshold !== false) lineThreshold(lab, data, W, H, pal);
+  // Rapikan: batas antar warna yang mirip (dE <= 10) mengikuti mayoritas
+  // sekitarnya → tidak bergerigi; batas kontras (outline) tidak disentuh.
+  if (o.mode === 'color' && o.clean !== false) {
+    majorityFilter(lab, W, H, Math.max(1, Math.round(s * 0.75)), 2, pal, 18);
+  }
   return lab;
 }
 
@@ -1560,7 +1646,7 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
 // Gradien: pita sangat tipis (lebar rata-rata < ~1,3 px sumber) yang warnanya
 // campuran dua tetangganya (peralihan antialias di sisi garis) dilebur ke
 // tetangga yang paling mirip — tiap garis gambar cukup satu kontur.
-function dropSlivers(lab, W, H, pal, s, comp, order) {
+function dropSlivers(lab, W, H, pal, s, comp, order, wMax = 1.3, tMin = 0.05, rMax = 10) {
   const info = label(lab, W, H, comp, order);
   const n = info.count, N = W * H;
   const per = new Float64Array(n);
@@ -1575,7 +1661,7 @@ function dropSlivers(lab, W, H, pal, s, comp, order) {
   for (let c = 0; c < n; c++) {
     const own = info.lbl[c];
     if (own >= HW || !per[c]) continue;
-    if ((2 * info.size[c]) / per[c] >= 1.3 * s) continue;
+    if ((2 * info.size[c]) / per[c] >= wMax * s) continue;
     votes.clear();
     for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
       const i = order[h], x = i % W;
@@ -1594,7 +1680,7 @@ function dropSlivers(lab, W, H, pal, s, comp, order) {
       if (vv > 1) {
         const t = ((C.L - A.L) * vx + (C.A - A.A) * vy + (C.B - A.B) * vz) / vv;
         const r = Math.hypot(A.L + t * vx - C.L, A.A + t * vy - C.A, A.B + t * vz - C.B);
-        if (t > 0.05 && t < 0.95 && r < 10) target = dE(own, top[0][0]) <= dE(own, top[1][0]) ? top[0][0] : top[1][0];
+        if (t > tMin && t < 1 - tMin && r < rMax) target = dE(own, top[0][0]) <= dE(own, top[1][0]) ? top[0][0] : top[1][0];
       }
     }
     if (target < 0 && dE(own, top[0][0]) < 5) target = top[0][0];
@@ -2117,9 +2203,22 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress) {
     const e = jsum.get(v);
     return [e[0] / e[2], e[1] / e[2]];
   };
+  // Penyederhanaan adaptif (Rapikan): batas yang lemah dukungan pikselnya (dua
+  // warna mirip) dihaluskan lebih kuat → lebih sedikit titik, tanpa gelombang.
+  const pal = o._pal, adaptive = o.mode === 'color' && o.clean !== false && pal;
+  const fitWeak = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 2.2 }) : null;
+  const fitMid = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.5 }) : null;
+  const pickFit = (ch) => {
+    if (!adaptive || ch.b < 0) return fitter;
+    const la = info.lbl[ch.a], lb = info.lbl[ch.b];
+    if (la >= HW || lb >= HW) return fitter;
+    const p = pal[la], q = pal[lb], d = Math.hypot(p.L - q.L, p.A - q.A, p.B - q.B);
+    return d < 10 ? fitWeak : d < 18 ? fitMid : fitter;
+  };
   chains.forEach((ch, i) => {
     const seq = ch.raw.open;
-    const geo = seq ? fitter.open(seq, jpos(seq[0]), jpos(seq[seq.length - 1])) : fitter.closed(ch.raw.closed);
+    const f = pickFit(ch);
+    const geo = seq ? f.open(seq, jpos(seq[0]), jpos(seq[seq.length - 1])) : f.closed(ch.raw.closed);
     ch.p = geo.p; ch.c = geo.c;
     delete ch.raw;
     nodes += geo.c.length;
