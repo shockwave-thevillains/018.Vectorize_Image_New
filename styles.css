@@ -235,6 +235,12 @@ img.orig { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-ren
   border-radius: 3px;
   white-space: nowrap;
 }
+.split.fixed { cursor: default; pointer-events: none; }
+.split.fixed i { background: var(--ink); }
+.twin { position: absolute; width: 0; height: 0; pointer-events: none; }
+.twin::before, .twin::after { content: ""; position: absolute; background: var(--accent); box-shadow: 0 0 0 1px var(--paper); }
+.twin::before { left: -9px; top: -0.75px; width: 18px; height: 1.5px; }
+.twin::after { top: -9px; left: -0.75px; height: 18px; width: 1.5px; }
 .split span:first-child { right: 8px; }
 .split span:last-of-type { left: 8px; }
 .busy {

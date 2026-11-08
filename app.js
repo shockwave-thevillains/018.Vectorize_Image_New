@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202610261341';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611081356';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -163,7 +163,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202610261341');
+  const w = new Worker('worker.js?v=202611081356');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -183,7 +183,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202610261341', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611081356', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -530,7 +530,7 @@ const stage = $('#stage');
 const vOrigWrap = $('#vOrigWrap'), vOrig = $('#vOrig');
 const vVec = $('#vVec'), vOut = $('#vOut');
 const vLens = $('#vLens'), vLensImg = $('#vLensImg'), vLensOut = $('#vLensOut'), vRing = $('#vRing');
-const vSplit = $('#vSplit'), vBusy = $('#vBusy');
+const vSplit = $('#vSplit'), vBusy = $('#vBusy'), vTwin = $('#vTwin');
 const LENS_R = 90;
 
 const V = { z: 1, px: 0, py: 0, mode: 'vector', lens: true, split: 0.5, fitted: false, mx: -1, my: -1, hover: false };
@@ -570,10 +570,16 @@ function select(id) {
   refreshName();
 }
 
+// Mode Berdampingan: panel kiri = asli, kanan = vektor; zoom & geser sama.
+// paneOff() = tepi kiri panel kanan; paneW() = lebar satu panel.
+const paneOff = () => (V.mode === 'side' ? Math.floor(stage.clientWidth / 2) : 0);
+const paneW = () => (V.mode === 'side' ? Math.floor(stage.clientWidth / 2) : stage.clientWidth);
+const localX = (x) => (V.mode === 'side' && x >= paneOff() ? x - paneOff() : x);
+
 function fit() {
   const it = selected();
   if (!it || !it.srcW) return;
-  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const sw = paneW(), sh = stage.clientHeight;
   V.z = Math.min(sw / it.srcW, sh / it.srcH) * 0.92;
   V.px = (sw - it.srcW * V.z) / 2;
   V.py = (sh - it.srcH * V.z) / 2;
@@ -600,7 +606,9 @@ function applyView() {
     }
   }
   const vb = `${-V.px / V.z} ${-V.py / V.z} ${sw / V.z} ${sh / V.z}`;
-  for (const s of [vVec, vOut, vLensOut, vHi]) s.setAttribute('viewBox', vb);
+  const vbR = `${-(V.px + paneOff()) / V.z} ${-V.py / V.z} ${sw / V.z} ${sh / V.z}`;
+  for (const s of [vOut, vLensOut]) s.setAttribute('viewBox', vb);
+  for (const s of [vVec, vHi]) s.setAttribute('viewBox', vbR);
   $('#zoomLabel').textContent = `${Math.round(V.z * 100)}%`;
   applyMode();
 }
@@ -614,7 +622,18 @@ function applyMode() {
   stage.classList.toggle('mode-outline', V.mode === 'outline');
 
   const x = Math.round(V.split * sw);
-  if (!has) {
+  vSplit.classList.toggle('fixed', V.mode === 'side');
+  vHi.style.clipPath = '';
+  if (V.mode === 'side') {
+    const off = paneOff();
+    vOrigWrap.hidden = false;
+    vOrigWrap.style.clipPath = `inset(0 ${sw - off}px 0 0)`;
+    vVec.style.display = has ? '' : 'none';
+    vVec.style.clipPath = vHi.style.clipPath = `inset(0 0 0 ${off}px)`;
+    vOut.style.display = 'none';
+    vSplit.hidden = false;
+    vSplit.style.left = `${off}px`;
+  } else if (!has) {
     vOrigWrap.hidden = false;
     vOrigWrap.style.clipPath = '';
     vVec.style.display = vOut.style.display = 'none';
@@ -773,7 +792,7 @@ let drag = null;
 stage.addEventListener('pointerdown', (e) => {
   if (!selected()) return;
   stage.focus({ preventScroll: true });
-  const onSplit = !vSplit.hidden && e.target.closest('#vSplit');
+  const onSplit = V.mode === 'compare' && !vSplit.hidden && e.target.closest('#vSplit');
   drag = { x: e.clientX, y: e.clientY, px: V.px, py: V.py, split: onSplit };
   stage.setPointerCapture(e.pointerId);
   if (!onSplit) stage.classList.add('dragging');
@@ -792,7 +811,17 @@ stage.addEventListener('pointermove', (e) => {
     if (V.mode === 'vector' && V.lens) applyMode();
     updateHover();
   }
+  updateTwin();
 });
+// Berdampingan: tanda silang di titik yang sama pada panel seberang.
+function updateTwin() {
+  const on = V.mode === 'side' && V.hover && V.mx >= 0 && !!selected();
+  vTwin.hidden = !on;
+  if (!on) return;
+  const off = paneOff();
+  vTwin.style.left = `${V.mx < off ? V.mx + off : V.mx - off}px`;
+  vTwin.style.top = `${V.my}px`;
+}
 
 // Sorot bentuk di bawah kursor (seperti vectorizer.ai); klik = hapus/kembalikan.
 const vHi = $('#vHi');
@@ -806,7 +835,8 @@ function pointRegion() {
   const it = selected();
   if (!it || !it.result || !V.hover || V.mx < 0) return -1;
   if (V.mode === 'compare' && V.mx < V.split * stage.clientWidth) return -1;
-  const sx = (V.mx - V.px) / V.z, sy = (V.my - V.py) / V.z;
+  if (V.mode === 'side' && V.mx < paneOff()) return -1; // panel "Asli"
+  const sx = (localX(V.mx) - V.px) / V.z, sy = (V.my - V.py) / V.z;
   if (sx < 0 || sy < 0 || sx >= it.result.srcW || sy >= it.result.srcH) return -1;
   return regionAt(it.result, sx, sy);
 }
@@ -830,7 +860,8 @@ stage.addEventListener('pointerup', (e) => {
   const r = stage.getBoundingClientRect();
   const mx = e.clientX - r.left, my = e.clientY - r.top;
   if (V.mode === 'compare' && mx < V.split * r.width) return; // sisi "Asli"
-  const sx = (mx - V.px) / V.z, sy = (my - V.py) / V.z;
+  if (V.mode === 'side' && mx < paneOff()) return;
+  const sx = (localX(mx) - V.px) / V.z, sy = (my - V.py) / V.z;
   if (sx < 0 || sy < 0 || sx >= it.srcW || sy >= it.srcH) return;
   if (regionAt(it.result, sx, sy) < 0) return;
   it.toggles = [...it.toggles, [sx, sy]];
@@ -838,22 +869,27 @@ stage.addEventListener('pointerup', (e) => {
   editsChanged(it);
 });
 stage.addEventListener('pointercancel', endDrag);
-stage.addEventListener('pointerleave', () => { V.hover = false; if (!drag) { applyMode(); updateHover(); } });
+stage.addEventListener('pointerleave', () => { V.hover = false; updateTwin(); if (!drag) { applyMode(); updateHover(); } });
 stage.addEventListener('wheel', (e) => {
   if (!selected()) return;
   e.preventDefault();
   const r = stage.getBoundingClientRect();
-  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+  zoomAt(localX(e.clientX - r.left), e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
 }, { passive: false });
 new ResizeObserver(() => { if (V.fitted) fit(); else applyView(); }).observe(stage);
 
-$$('.vbar .seg button').forEach((b) => b.addEventListener('click', () => {
-  V.mode = b.dataset.mode;
+function setMode(m) {
+  const w0 = paneW();
+  V.mode = m;
   try { localStorage.setItem('vektor.mode', V.mode); } catch { /* abaikan */ }
-  applyMode();
-}));
+  // Lebar panel berubah (Berdampingan <-> lainnya): titik tengah tetap di tengah.
+  if (paneW() !== w0) { if (V.fitted) fit(); else { V.px += (paneW() - w0) / 2; applyView(); } }
+  else applyMode();
+  updateTwin();
+}
+$$('.vbar .seg button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
 function toolAct(act) {
-  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const sw = paneW(), sh = stage.clientHeight;
   if (act === 'zoomin') zoomAt(sw / 2, sh / 2, 1.5);
   else if (act === 'zoomout') zoomAt(sw / 2, sh / 2, 1 / 1.5);
   else if (act === 'fit') fit();
@@ -879,8 +915,8 @@ window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens', b: 'bg', B: 'bg' };
   if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
-  const modes = { c: 'compare', v: 'vector', o: 'outline' };
-  if (modes[e.key] && selected()) { V.mode = modes[e.key]; applyMode(); }
+  const modes = { c: 'compare', s: 'side', v: 'vector', o: 'outline' };
+  if (modes[e.key] && selected()) setMode(modes[e.key]);
 });
 
 // ---------------------------------------------------------------- panel

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202610261341">
+  <link rel="stylesheet" href="styles.css?v=202611081356">
 </head>
 <body>
   <header class="top">
@@ -30,7 +30,8 @@
       <div class="viewer" id="viewer">
         <div class="vbar">
           <div class="seg" role="radiogroup" aria-label="Mode tampilan">
-            <button type="button" data-mode="compare" aria-pressed="false">Bandingkan</button>
+            <button type="button" data-mode="compare" aria-pressed="false" title="Geser pembatas (C)">Bandingkan</button>
+            <button type="button" data-mode="side" aria-pressed="false" title="Asli dan vektor berdampingan, zoom &amp; geser bersamaan (S)">Berdampingan</button>
             <button type="button" data-mode="vector" aria-pressed="true">Vektor</button>
             <button type="button" data-mode="outline" aria-pressed="false">Garis</button>
           </div>
@@ -56,6 +57,7 @@
             <svg class="out" id="vLensOut" xmlns="http://www.w3.org/2000/svg"></svg>
           </div>
           <div class="ring" id="vRing" hidden></div>
+          <div class="twin" id="vTwin" hidden></div>
           <div class="split" id="vSplit" hidden><span>Asli</span><i></i><span>Vektor</span></div>
           <div class="busy mono" id="vBusy" hidden></div>
 
@@ -277,6 +279,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202610261341"></script>
+  <script type="module" src="app.js?v=202611081356"></script>
 </body>
 </html>
