@@ -2242,14 +2242,16 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress) {
   // Penyederhanaan adaptif (Rapikan): batas yang lemah dukungan pikselnya (dua
   // warna mirip) dihaluskan lebih kuat → lebih sedikit titik, tanpa gelombang.
   const pal = o._pal, adaptive = o.mode === 'color' && o.clean !== false && pal;
-  const fitWeak = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 2.2 }) : null;
-  const fitMid = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.5 }) : null;
+  const ws = o.straighten === true;
+  const fitWeak = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 2.2, weakStraight: ws }) : null;
+  const fitMid = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.5, weakStraight: ws }) : null;
+  const fitSoft = adaptive && ws ? makeFitter(W1, s, { ...o, weakStraight: true }) : null;
   const pickFit = (ch) => {
     if (!adaptive || ch.b < 0) return fitter;
     const la = info.lbl[ch.a], lb = info.lbl[ch.b];
     if (la >= HW || lb >= HW) return fitter;
     const p = pal[la], q = pal[lb], d = Math.hypot(p.L - q.L, p.A - q.A, p.B - q.B);
-    return d < 10 ? fitWeak : d < 18 ? fitMid : fitter;
+    return d < 10 ? fitWeak : d < 18 ? fitMid : d < 30 && fitSoft ? fitSoft : fitter;
   };
   chains.forEach((ch, i) => {
     const seq = ch.raw.open;
@@ -2478,9 +2480,14 @@ function makeFitter(W1, s, o) {
   // garis panjang memang lurus (gelombang tersebar di kedua sisi, tidak condong
   // ke satu sisi seperti busur) dijadikan satu garis lurus. Toleransi tumbuh
   // dengan panjang garis: 2,5 % panjangnya, maks. 2 px sumber.
-  const longOn = o.straighten === true;
-  const longMin = 18 * s;
-  const longTol = (L) => Math.min(2 * s, Math.max(runMaxDev, 0.025 * L));
+  // Batas berkontras rendah (dua warna mirip, mis. kilau/bayangan sedotan):
+  // letak tepinya kurang pasti, jadi toleransinya lebih longgar dan gelombang-S
+  // diizinkan; busur (condong ke satu sisi) tetap ditolak.
+  const weak = o.weakStraight === true;
+  const longOn = o.straighten === true || weak;
+  const longMin = (weak ? 8 : 18) * s;
+  const longTol = weak ? (L) => Math.min(3 * s, Math.max(1.5 * s, 0.1 * L)) : (L) => Math.min(2 * s, Math.max(0.6 * s, 0.035 * L));
+  const biasAll = weak ? 0.4 : 0.22;
 
   function lineOk(Q, i, j) {
     const ax = Q[i * 2], ay = Q[i * 2 + 1];
@@ -2510,17 +2517,22 @@ function makeFitter(W1, s, o) {
     const tol = longTol(L);
     const n = j - i - 1;
     if (n < 8) return 0;
-    const qs = [0, 0, 0, 0], qn = [0, 0, 0, 0];
-    let sum = 0;
+    // Simpangan bertanda d(t) terhadap tali busur, t = posisi 0..1 di sepanjangnya.
+    // Busur: d ~ c*t(1-t); lengkung-S: d ~ e*t(1-t)(2t-1). Gerigi acak tidak
+    // mengikuti keduanya. Bila busur/S-nya nyata (> 25 % / 35 % toleransi),
+    // itu lengkungan sungguhan -> jangan diluruskan.
+    let sum = 0, su = 0, suu = 0, sv = 0, svv = 0;
     for (let k = i + 1; k < j; k++) {
-      const d = ((Q[k * 2] - ax) * dy - (Q[k * 2 + 1] - ay) * dx) / L;
+      const px = Q[k * 2] - ax, py = Q[k * 2 + 1] - ay;
+      const d = (px * dy - py * dx) / L;
       if (d > tol || d < -tol) return 0;
-      sum += d;
-      const q = Math.min(3, (((k - i - 1) * 4) / n) | 0);
-      qs[q] += d; qn[q]++;
+      const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (L * L)));
+      const u = t * (1 - t), v = u * (2 * t - 1);
+      sum += d; su += d * u; suu += u * u; sv += d * v; svv += v * v;
     }
-    if (Math.abs(sum / n) > 0.22 * tol) return 0;
-    for (let q = 0; q < 4; q++) if (qn[q] && Math.abs(qs[q] / qn[q]) > 0.45 * tol) return 0;
+    if (Math.abs(sum / n) > biasAll * tol) return 0;
+    if (suu > 0 && Math.abs(su / suu) * 0.25 > 0.25 * tol) return 0; // sagita busur
+    if (svv > 0 && Math.abs(sv / svv) * 0.0962 > 0.35 * tol) return 0; // amplitudo S
     return L;
   }
 
@@ -2531,8 +2543,11 @@ function makeFitter(W1, s, o) {
     while (i < b - 2) {
       if (longOn) {
         // Coba garis panjang dulu dari titik ini.
-        let j = Math.min(b, i + Math.ceil(longMin * 1.1));
-        if (lineOkLong(Q, i, j)) {
+        // Ujung uji pertama dipilih menurut panjang sebenarnya (titik pada
+        // garis diagonal lebih rapat daripada 1 px).
+        let j = i + 1, al = 0;
+        while (j < b && al < longMin * 1.05) { al += Math.hypot(Q[j * 2] - Q[(j - 1) * 2], Q[j * 2 + 1] - Q[(j - 1) * 2 + 1]); j++; }
+        if (al >= longMin && lineOkLong(Q, i, j)) {
           let good = j;
           while (good < b) { const nj = Math.min(b, good + step); if (lineOkLong(Q, i, nj)) good = nj; else break; }
           while (good < b && lineOkLong(Q, i, good + 1)) good++;

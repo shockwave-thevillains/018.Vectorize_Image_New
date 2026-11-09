@@ -27,7 +27,11 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Kode nama file**: `[kode]_[urutan]_[nama_awal]`, mis. `011_1_600_01_stencil_voids_emblem.svg`.
 - **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
 - **Palet per gambar**: ganti warna atau jadikan transparan.
-- **Penampil**: Bandingkan (geser pembatas), **Berdampingan** (asli kiri, vektor kanan; zoom dan geser bersamaan, tanda silang menunjukkan titik yang sama di panel seberang; tombol **S**), Vektor, Garis (outline), zoom, 1:1, lensa piksel, latar pratinjau gelap/terang (tombol atau tombol keyboard **B**; hanya tampilan, tidak memproses ulang).
+- **Tema terang/gelap**: tombol di kanan atas (otomatis → terang → gelap), tersimpan di browser.
+- **Bantuan (?)**: arahkan kursor ke ikon tanda tanya di samping pengaturan untuk penjelasan nilai kecil vs besar.
+- **Default**: tombol di atas panel mengembalikan semua pengaturan ke nilai bawaan (kode nama file dan nomor mulai tidak diubah).
+- **Kode nama file** ada di urutan pertama panel agar tidak lupa diganti.
+- **Penampil**: Bandingkan (geser pembatas), **Berdampingan** (keduanya tanpa penanda oranye agar hasil terlihat apa adanya) (asli kiri, vektor kanan; zoom dan geser bersamaan, tanda silang menunjukkan titik yang sama di panel seberang; tombol **S**), Vektor, Garis (outline), zoom, 1:1, lensa piksel, latar pratinjau gelap/terang (tombol atau tombol keyboard **B**; hanya tampilan, tidak memproses ulang).
 - **Susunan**: Tumpuk (bentuk bersarang tanpa retak) atau Potong (tanpa tumpang tindih), plus pengisi celah: tiap bentuk mendapat garis sewarna yang meluas ke bawah bentuk yang digambar sesudahnya, jadi tidak ada retakan saat dilihat diperkecil dan tidak ada bentuk yang menebal.
 
 ## Cara kerja tracing

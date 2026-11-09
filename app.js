@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611090521';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611090935';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -169,7 +169,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611090521');
+  const w = new Worker('worker.js?v=202611090935');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -189,7 +189,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611090521', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611090935', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -542,7 +542,7 @@ const LENS_R = 90;
 const V = { z: 1, px: 0, py: 0, mode: 'vector', lens: true, split: 0.5, fitted: false, mx: -1, my: -1, hover: false };
 try { const m = localStorage.getItem('vektor.mode'); if (m) V.mode = m; } catch { /* abaikan */ }
 // Latar pratinjau (hanya tampilan; tidak memengaruhi hasil atau proses).
-const prefersDark = () => window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+const prefersDark = () => (document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches));
 try { V.bg = localStorage.getItem('vektor.stagebg') || ''; } catch { V.bg = ''; }
 function applyStageBg() {
   const bg = V.bg || (prefersDark() ? 'dark' : 'light');
@@ -626,6 +626,8 @@ function applyMode() {
   $$('.vbar .seg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === V.mode)));
   $('[data-act="lens"]').setAttribute('aria-pressed', String(V.lens));
   stage.classList.toggle('mode-outline', V.mode === 'outline');
+  stage.classList.toggle('mode-compare', V.mode === 'compare');
+  stage.classList.toggle('mode-side', V.mode === 'side');
 
   const x = Math.round(V.split * sw);
   vSplit.classList.toggle('fixed', V.mode === 'side');
@@ -954,7 +956,37 @@ function bindSettings() {
   $('#code').addEventListener('input', (e) => { S.code = e.target.value; changed('code'); });
   $('#start').addEventListener('input', (e) => { S.start = Math.max(0, Math.round(Number(e.target.value) || 0)); changed('start'); });
   $$('input[name="format"]').forEach((el) => el.addEventListener('change', () => { S.format = el.value; changed('format'); }));
+  // Default: semua pengaturan kembali ke bawaan; kode nama file & nomor mulai tetap.
+  $('#defaultsBtn').addEventListener('click', () => {
+    const keep = { code: S.code, start: S.start };
+    Object.keys(S).forEach((k) => { if (!(k in DEFAULTS)) delete S[k]; });
+    Object.assign(S, DEFAULTS, keep);
+    items.forEach((it) => { it.outline = null; });
+    changed('mode');
+    renderViewer();
+    refreshName();
+    refreshSize();
+  });
 }
+
+// ---------------------------------------------------------------- tema
+const THEMES = ['', 'light', 'dark'];
+const THEME_NAME = { '': 'otomatis (ikut sistem)', light: 'terang', dark: 'gelap' };
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const b = $('#themeBtn');
+  if (b) { b.title = `Tema: ${THEME_NAME[t]} — klik untuk ganti`; b.dataset.mode = t || 'auto'; }
+  applyStageBg();
+}
+let theme = '';
+try { theme = localStorage.getItem('vektor.theme') || ''; } catch { /* abaikan */ }
+$('#themeBtn').addEventListener('click', () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  try { localStorage.setItem('vektor.theme', theme); } catch { /* abaikan */ }
+  applyTheme(theme);
+});
+applyTheme(theme);
 
 const LABELS = {
   colorMerge: (v) => `ΔE ${v}`,

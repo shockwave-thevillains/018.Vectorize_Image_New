@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202611090521">
+  <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* abaikan */ }</script>
+  <link rel="stylesheet" href="styles.css?v=202611090935">
 </head>
 <body>
   <header class="top">
@@ -21,6 +22,9 @@
     <button class="btn ghost" id="addBtn" type="button">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg>
       Tambah gambar
+    </button>
+    <button class="btn ghost icon theme-btn" id="themeBtn" type="button" title="Tema: otomatis" aria-label="Tema">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
     </button>
     <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" multiple hidden>
   </header>
@@ -97,11 +101,22 @@
     </section>
 
     <aside class="panel" aria-label="Pengaturan">
+      <div class="preset-row"><span>Pengaturan tersimpan otomatis di browser ini.</span><button type="button" class="btn ghost small" id="defaultsBtn" title="Kembalikan semua pengaturan ke nilai bawaan (kode nama file tidak diubah)">Default</button></div>
       <div class="panel-scroll">
         <section class="group">
-          <h3><span class="n mono">01</span> Pemrosesan</h3>
+          <h3><span class="n mono">01</span> Kode nama file</h3>
+          <p class="note">Pola: <code class="mono">[kode]_[urutan]_[nama_awal]</code></p>
+          <div class="row-inline">
+            <label class="input"><span>Kode</span><input class="mono" id="code" type="text" placeholder="mis. 011" autocomplete="off" spellcheck="false"></label>
+            <label class="input short"><span>Mulai</span><input class="mono" id="start" type="number" min="0" step="1" value="1"></label>
+          </div>
+          <p class="example" id="nameExample"></p>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">02</span> Pemrosesan</h3>
           <div class="field">
-            <div class="flabel">Mode</div>
+            <div class="flabel">Mode<span class="help" tabindex="0" role="note" data-tip="Warna: ilustrasi flat berwarna.&#10;Siluet: stensil, logo hitam-putih, emblem.&#10;Gradien: gambar penuh gradasi/cahaya (banyak tingkat warna)." aria-label="Warna: ilustrasi flat berwarna.&#10;Siluet: stensil, logo hitam-putih, emblem.&#10;Gradien: gambar penuh gradasi/cahaya (banyak tingkat warna).">?</span></div>
             <div class="seg wide" data-opt="mode">
               <button type="button" data-v="color">Warna</button>
               <button type="button" data-v="silhouette">Siluet</button>
@@ -109,26 +124,26 @@
             </div>
           </div>
           <div class="field" data-show="gradient">
-            <label class="flabel" for="gradColors">Jumlah warna <output class="mono" for="gradColors"></output></label>
+            <label class="flabel" for="gradColors">Jumlah warna<span class="help" tabindex="0" role="note" data-tip="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak." aria-label="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak.">?</span> <output class="mono" for="gradColors"></output></label>
             <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
             <div class="scale mono"><span>ringan</span><span>detail</span></div>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Garis setipis ≤ 3 px dikenali dan dibuat sebagai garis (stroke) bertebal seragam, bukan isian.</small></span></label>
             <p class="note">Untuk gambar penuh gradasi/cahaya. Gradasi dibentuk dari banyak tingkat warna (seperti vectorizer.ai).</p>
           </div>
           <div class="field" data-show="silhouette">
-            <div class="flabel">Nada</div>
+            <div class="flabel">Nada<span class="help" tabindex="0" role="note" data-tip="Hitam + abu-abu: hitam dan setiap tingkat abu-abu dipertahankan.&#10;Hitam saja: hanya hitam, ditentukan ambang gelap/terang." aria-label="Hitam + abu-abu: hitam dan setiap tingkat abu-abu dipertahankan.&#10;Hitam saja: hanya hitam, ditentukan ambang gelap/terang.">?</span></div>
             <div class="seg wide" data-opt="silTones">
               <button type="button" data-v="gray">Hitam + abu-abu</button>
               <button type="button" data-v="binary">Hitam saja</button>
             </div>
           </div>
           <div class="field" data-show="silhouette:binary">
-            <label class="flabel" for="silThreshold">Ambang gelap/terang <output class="mono" for="silThreshold"></output></label>
+            <label class="flabel" for="silThreshold">Ambang gelap/terang<span class="help" tabindex="0" role="note" data-tip="Batas kecerahan antara hitam dan putih.&#10;Kecil: hanya bagian sangat gelap jadi hitam (siluet lebih tipis).&#10;Besar: abu-abu ikut jadi hitam (siluet lebih tebal)." aria-label="Batas kecerahan antara hitam dan putih.&#10;Kecil: hanya bagian sangat gelap jadi hitam (siluet lebih tipis).&#10;Besar: abu-abu ikut jadi hitam (siluet lebih tebal).">?</span> <output class="mono" for="silThreshold"></output></label>
             <input type="range" id="silThreshold" data-opt="silThreshold" min="30" max="230" step="1">
             <div class="scale mono"><span>siluet lebih tipis</span><span>lebih tebal</span></div>
           </div>
           <div class="field">
-            <div class="flabel">Upscale <em>sebelum tracing</em></div>
+            <div class="flabel">Upscale<span class="help" tabindex="0" role="note" data-tip="Gambar diperbesar dulu sebelum ditelusuri supaya batas warna jatuh di posisi sub-piksel.&#10;Besar (4×): tepi lebih presisi dan mulus, proses sedikit lebih lama." aria-label="Gambar diperbesar dulu sebelum ditelusuri supaya batas warna jatuh di posisi sub-piksel.&#10;Besar (4×): tepi lebih presisi dan mulus, proses sedikit lebih lama.">?</span> <em>sebelum tracing</em></div>
             <div class="seg wide" data-opt="upscale">
               <button type="button" data-v="1">1×</button>
               <button type="button" data-v="2">2×</button>
@@ -137,7 +152,7 @@
             </div>
           </div>
           <div class="field" data-show="color">
-            <div class="flabel">Jumlah warna maksimum</div>
+            <div class="flabel">Jumlah warna maksimum<span class="help" tabindex="0" role="note" data-tip="Otomatis: jumlah warna ditentukan dari gambar.&#10;Batas: hasil dipaksa paling banyak sejumlah ini (warna mirip digabung)." aria-label="Otomatis: jumlah warna ditentukan dari gambar.&#10;Batas: hasil dipaksa paling banyak sejumlah ini (warna mirip digabung).">?</span></div>
             <div class="row-inline">
               <div class="seg" data-opt="colorAuto">
                 <button type="button" data-v="1">Otomatis</button>
@@ -147,39 +162,39 @@
             </div>
           </div>
           <div class="field" data-show="color">
-            <label class="flabel" for="colorMerge">Kepekaan warna <output class="mono" for="colorMerge"></output></label>
+            <label class="flabel" for="colorMerge">Kepekaan warna<span class="help" tabindex="0" role="note" data-tip="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain." aria-label="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain.">?</span> <output class="mono" for="colorMerge"></output></label>
             <input type="range" id="colorMerge" data-opt="colorMerge" min="4" max="30" step="1">
             <div class="scale mono"><span>banyak nuansa</span><span>sedikit warna</span></div>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="clean"><span><b>Rapikan</b><small>Bersihkan derau/tekstur, rapikan batas antar warna yang mirip, dan sederhanakan kurvanya. Outline dan detail kontras tetap tajam.</small></span></label>
             <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Untuk gambar kaya warna/tekstur (≥ 24 warna): garis tipis yang pecah ditambahkan sebagai stroke bertebal seragam.</small></span></label>
           </div>
           <div class="field" data-show="color">
-            <label class="flabel" for="rough">Haluskan tepi kasar <output class="mono" for="rough"></output></label>
+            <label class="flabel" for="rough">Haluskan tepi kasar<span class="help" tabindex="0" role="note" data-tip="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis." aria-label="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis.">?</span> <output class="mono" for="rough"></output></label>
             <input type="range" id="rough" data-opt="rough" min="0" max="4" step="0.5">
             <div class="scale mono"><span>mati (setia ke tepi)</span><span>tepi kuas → mulus</span></div>
             <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="straighten"><span><b>Luruskan garis panjang</b><small>Tepi yang bergerigi tetapi bila ditarik garis panjang memang lurus dijadikan satu garis lurus. Lengkungan tetap lengkung.</small></span></label>
           </div>
           <div class="field">
-            <label class="flabel" for="smooth">Kehalusan kurva <output class="mono" for="smooth"></output></label>
+            <label class="flabel" for="smooth">Kehalusan kurva<span class="help" tabindex="0" role="note" data-tip="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat." aria-label="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat.">?</span> <output class="mono" for="smooth"></output></label>
             <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
             <div class="scale mono"><span>presisi</span><span>halus</span></div>
           </div>
           <div class="field">
-            <label class="flabel" for="minArea">Buang bintik &lt; <output class="mono" for="minArea"></output></label>
+            <label class="flabel" for="minArea">Buang bintik &lt;<span class="help" tabindex="0" role="note" data-tip="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang." aria-label="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang.">?</span> <output class="mono" for="minArea"></output></label>
             <input type="range" id="minArea" data-opt="minArea" min="0" max="80" step="1">
           </div>
           <div class="field">
-            <label class="flabel" for="corner">Sudut tajam ≥ <output class="mono" for="corner"></output></label>
+            <label class="flabel" for="corner">Sudut tajam ≥<span class="help" tabindex="0" role="note" data-tip="Belokan yang lebih tajam dari sudut ini dibuat runcing; yang lebih landai dibuat melengkung.&#10;Kecil: lebih banyak sudut runcing (tampak kaku/bersegi).&#10;Besar: lebih banyak belokan membulat." aria-label="Belokan yang lebih tajam dari sudut ini dibuat runcing; yang lebih landai dibuat melengkung.&#10;Kecil: lebih banyak sudut runcing (tampak kaku/bersegi).&#10;Besar: lebih banyak belokan membulat.">?</span> <output class="mono" for="corner"></output></label>
             <input type="range" id="corner" data-opt="corner" min="35" max="110" step="1">
             <div class="scale mono"><span>lebih banyak sudut</span><span>lebih membulat</span></div>
           </div>
         </section>
 
         <section class="group">
-          <h3><span class="n mono">02</span> Latar</h3>
+          <h3><span class="n mono">03</span> Latar</h3>
           <div class="field">
-            <div class="flabel">Warna latar gambar</div>
+            <div class="flabel">Warna latar gambar<span class="help" tabindex="0" role="note" data-tip="Warna latar yang dibuang menjadi transparan.&#10;Tanpa: semua warna divectorisasi.&#10;Putih: latar putih dibuang.&#10;Magenta: latar #FF00FF dibuang (disarankan, putih tetap aman)." aria-label="Warna latar yang dibuang menjadi transparan.&#10;Tanpa: semua warna divectorisasi.&#10;Putih: latar putih dibuang.&#10;Magenta: latar #FF00FF dibuang (disarankan, putih tetap aman).">?</span></div>
             <div class="seg wide" data-opt="bgKey">
               <button type="button" data-v="none">Tanpa</button>
               <button type="button" data-v="white">Putih</button>
@@ -188,13 +203,13 @@
             <p class="note" data-bg="none">Tidak ada warna yang dihapus — semua warna, termasuk putih dan magenta, ikut divectorisasi. Klik bentuk di pratinjau bila ingin menghapus bagian tertentu.</p>
           </div>
           <div class="field" data-bg="magenta">
-            <label class="flabel" for="keyTol">Toleransi magenta <output class="mono" for="keyTol"></output></label>
+            <label class="flabel" for="keyTol">Toleransi magenta<span class="help" tabindex="0" role="note" data-tip="Seberapa jauh dari magenta murni yang masih dianggap latar.&#10;Kecil: hanya magenta murni.&#10;Besar: ungu/pink di dekatnya ikut dibuang — hati-hati bila objek berwarna ungu/pink." aria-label="Seberapa jauh dari magenta murni yang masih dianggap latar.&#10;Kecil: hanya magenta murni.&#10;Besar: ungu/pink di dekatnya ikut dibuang — hati-hati bila objek berwarna ungu/pink.">?</span> <output class="mono" for="keyTol"></output></label>
             <input type="range" id="keyTol" data-opt="keyTol" min="0" max="50" step="1">
             <div class="scale mono"><span>hanya magenta murni</span><span>ungu/pink ikut</span></div>
             <p class="note">Semua warna sedekat ini dengan magenta menjadi transparan. Putih di mana pun tetap putih.</p>
           </div>
           <div class="field" data-show="silhouette" data-bg="white">
-            <div class="flabel">Rongga di dalam siluet</div>
+            <div class="flabel">Rongga di dalam siluet<span class="help" tabindex="0" role="note" data-tip="Luar: hanya putih di luar objek yang dibuang.&#10;Pintar: menebak putih terkurung yang termasuk latar.&#10;Semua: semua putih dibuang.&#10;Isi: rongga diisi warna siluet." aria-label="Luar: hanya putih di luar objek yang dibuang.&#10;Pintar: menebak putih terkurung yang termasuk latar.&#10;Semua: semua putih dibuang.&#10;Isi: rongga diisi warna siluet.">?</span></div>
             <div class="seg wide" data-opt="cavity">
               <button type="button" data-v="white">Luar</button>
               <button type="button" data-v="smart">Pintar</button>
@@ -204,7 +219,7 @@
             <p class="note" id="cavityNote"></p>
           </div>
           <div class="field" data-show="color gradient" data-bg="white">
-            <div class="flabel">Putih yang dijadikan transparan</div>
+            <div class="flabel">Putih yang dijadikan transparan<span class="help" tabindex="0" role="note" data-tip="Tidak: putih dipertahankan.&#10;Luar: hanya putih yang tersambung ke tepi gambar.&#10;AI / Pintar: juga menebak putih di dalam yang termasuk latar.&#10;Semua: semua putih." aria-label="Tidak: putih dipertahankan.&#10;Luar: hanya putih yang tersambung ke tepi gambar.&#10;AI / Pintar: juga menebak putih di dalam yang termasuk latar.&#10;Semua: semua putih.">?</span></div>
             <div class="seg wide" data-opt="whiteMode">
               <button type="button" data-v="off">Tidak</button>
               <button type="button" data-v="outer">Luar</button>
@@ -215,7 +230,7 @@
             <p class="note" id="whiteNote"></p>
           </div>
           <div class="field" data-show="color gradient silhouette:gray" data-bg="white">
-            <label class="flabel" for="whiteTol">Toleransi putih <output class="mono" for="whiteTol"></output></label>
+            <label class="flabel" for="whiteTol">Toleransi putih<span class="help" tabindex="0" role="note" data-tip="Seberapa mendekati putih yang masih dianggap putih (ΔE).&#10;Kecil: hanya putih bersih.&#10;Besar: abu-abu/krem sangat terang ikut dianggap putih." aria-label="Seberapa mendekati putih yang masih dianggap putih (ΔE).&#10;Kecil: hanya putih bersih.&#10;Besar: abu-abu/krem sangat terang ikut dianggap putih.">?</span> <output class="mono" for="whiteTol"></output></label>
             <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
           </div>
           <div class="learn">
@@ -225,7 +240,7 @@
         </section>
 
         <section class="group">
-          <h3><span class="n mono">03</span> Ukuran output <span class="badge">Standar microstock</span></h3>
+          <h3><span class="n mono">04</span> Ukuran output <span class="badge">Standar microstock</span></h3>
           <div class="chips" data-opt="size">
             <button type="button" data-v="15">15 MP <small>Minimal</small></button>
             <button type="button" data-v="20">20 MP <small>HD</small></button>
@@ -235,7 +250,7 @@
             <button type="button" data-v="orig">Asli</button>
           </div>
           <div class="field" id="customField" hidden>
-            <label class="flabel" for="customMP">Megapiksel kustom</label>
+            <label class="flabel" for="customMP">Megapiksel kustom<span class="help" tabindex="0" role="note" data-tip="Ukuran artboard hasil dalam megapiksel (minimal 15 MP untuk microstock)." aria-label="Ukuran artboard hasil dalam megapiksel (minimal 15 MP untuk microstock).">?</span></label>
             <input class="num mono" id="customMP" type="number" min="15" max="100" step="0.5" value="15">
           </div>
           <p class="readout mono" id="sizeReadout">—</p>
@@ -243,9 +258,9 @@
         </section>
 
         <section class="group">
-          <h3><span class="n mono">04</span> Struktur</h3>
+          <h3><span class="n mono">05</span> Struktur</h3>
           <div class="field">
-            <div class="flabel">Susunan bentuk</div>
+            <div class="flabel">Susunan bentuk<span class="help" tabindex="0" role="note" data-tip="Tumpuk: bentuk ditumpuk dari belakang ke depan — tanpa retak, mudah diedit.&#10;Potong: bentuk saling memotong tanpa tumpang tindih — untuk cutting plotter/sablon." aria-label="Tumpuk: bentuk ditumpuk dari belakang ke depan — tanpa retak, mudah diedit.&#10;Potong: bentuk saling memotong tanpa tumpang tindih — untuk cutting plotter/sablon.">?</span></div>
             <div class="seg wide" data-opt="stacking">
               <button type="button" data-v="stacked">Tumpuk</button>
               <button type="button" data-v="cutout">Potong</button>
@@ -253,16 +268,6 @@
             <p class="note" id="stackNote"></p>
           </div>
           <label class="check"><input type="checkbox" data-opt="gapFill"><span><b>Pengisi celah</b><small>Garis tipis sewarna di bawah bentuk agar sambungan tidak tampak retak.</small></span></label>
-        </section>
-
-        <section class="group">
-          <h3><span class="n mono">05</span> Kode nama file</h3>
-          <p class="note">Pola: <code class="mono">[kode]_[urutan]_[nama_awal]</code></p>
-          <div class="row-inline">
-            <label class="input"><span>Kode</span><input class="mono" id="code" type="text" placeholder="mis. 011" autocomplete="off" spellcheck="false"></label>
-            <label class="input short"><span>Mulai</span><input class="mono" id="start" type="number" min="0" step="1" value="1"></label>
-          </div>
-          <p class="example" id="nameExample"></p>
         </section>
 
         <section class="group">
@@ -288,6 +293,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611090521"></script>
+  <script type="module" src="app.js?v=202611090935"></script>
 </body>
 </html>
