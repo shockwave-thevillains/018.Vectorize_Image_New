@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=202611081437">
+  <link rel="stylesheet" href="styles.css?v=202611090258">
 </head>
 <body>
   <header class="top">
@@ -153,6 +153,12 @@
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="clean"><span><b>Rapikan</b><small>Bersihkan derau/tekstur, rapikan batas antar warna yang mirip, dan sederhanakan kurvanya. Outline dan detail kontras tetap tajam.</small></span></label>
             <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Untuk gambar kaya warna/tekstur (≥ 24 warna): garis tipis yang pecah ditambahkan sebagai stroke bertebal seragam.</small></span></label>
           </div>
+          <div class="field" data-show="color">
+            <label class="flabel" for="rough">Haluskan tepi kasar <output class="mono" for="rough"></output></label>
+            <input type="range" id="rough" data-opt="rough" min="0" max="4" step="0.5">
+            <div class="scale mono"><span>mati (setia ke tepi)</span><span>tepi kuas → mulus</span></div>
+            <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
+          </div>
           <div class="field">
             <label class="flabel" for="smooth">Kehalusan kurva <output class="mono" for="smooth"></output></label>
             <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
@@ -281,6 +287,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611081437"></script>
+  <script type="module" src="app.js?v=202611090258"></script>
 </body>
 </html>

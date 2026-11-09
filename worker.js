@@ -109,6 +109,8 @@ async function vectorize(file, o, progress, aiMask) {
   // penghalusan yang menjaga tepi, sebelum palet (seperti vectorizer.ai yang
   // "membaca" maksud gambar, bukan tiap bintik). Detail kontras dilindungi.
   const clean = o.mode === 'color' && o.clean !== false;
+  // Haluskan tepi kasar hanya untuk mode Warna.
+  o = { ...o, rough: o.mode === 'color' ? +o.rough || 0 : 0 };
   const raw = clean && o.lineStrokes !== false ? new Uint8ClampedArray(src) : null;
   if (clean) {
     const keep = detailMask(src, sw, sh, 30, 40);
@@ -200,6 +202,13 @@ async function vectorize(file, o, progress, aiMask) {
   // Rapikan: bentuk sempit berwarna campuran dua tetangganya (sisa antialias di
   // ujung goresan, pinggiran garis) dilebur ke tetangga yang paling mirip.
   if (clean) dropSlivers(lab, W, H, pal, s, comp, order, 2.2, 0.2, 6);
+  // Tepi kasar: tonjolan & lekukan kecil di semua batas (juga bercak warna di
+  // sepanjang tepi kuas) dihaluskan dengan filter mayoritas berjangkauan
+  // o.rough px sumber, lalu sisa bintiknya dibuang.
+  if (o.rough > 0) {
+    majorityFilter(lab, W, H, Math.max(1, Math.round(o.rough * s)), 2, null, 0);
+    despeckle(lab, W, H, Math.max(minA, Math.round((o.rough * s) ** 2 * 3)), comp, order, pal, null);
+  }
   progress(0.45, 'bersih');
 
   // Putih → transparan.
@@ -2274,6 +2283,12 @@ function makeFitter(W1, s, o) {
   // Penghalusan kuat setelah sudut dikunci: menghapus gelombang tangga piksel
   // sumber (yang setelah upscale berperiode beberapa piksel kerja).
   const heavy = Math.min(40, Math.max(2, Math.round(((0.25 + o.smooth) * s) ** 2)));
+  // Tepi kasar (gaya kuas kering, sobekan): gelombang kecil sepanjang tepi
+  // (<= o.rough px sumber) dihaluskan; hanya sudut yang tetap tajam pada skala
+  // yang lebih besar daripada gelombang itu yang dipertahankan.
+  const roughSig = Math.max(0, o.rough || 0) * s;
+  const roughPasses = roughSig > 0 ? Math.min(400, Math.round(2 * roughSig * roughSig)) : 0;
+  const roughWin = Math.max(1, Math.round(3 * roughSig));
 
   const vx = (v) => v % W1, vy = (v) => (v / W1) | 0;
 
@@ -2304,7 +2319,11 @@ function makeFitter(W1, s, o) {
     const fixed = new Uint8Array(n);
     fixed[0] = fixed[n - 1] = 1;
     let Q = smooth(P, n, false, fixed, 1);
-    const cor = corners(Q, n, false);
+    const cor = corners(Q, n, false, roughWin);
+    if (roughPasses) {
+      for (const i of cor) fixed[i] = 1;
+      Q = smooth(Q, n, false, fixed, roughPasses);
+    }
     for (const i of cor) fixed[i] = 1;
     Q = smooth(Q, n, false, fixed, heavy, true);
     const out = newPath(Q[0], Q[1]);
@@ -2315,7 +2334,11 @@ function makeFitter(W1, s, o) {
   function processClosed(P, n) {
     const fixed = new Uint8Array(n);
     let Q = smooth(P, n, true, fixed, 1);
-    const cor = corners(Q, n, true);
+    const cor = corners(Q, n, true, roughWin);
+    if (roughPasses && n > 8) {
+      for (const i of cor) fixed[i] = 1;
+      Q = smooth(Q, n, true, fixed, Math.min(roughPasses, n * 2));
+    }
     if (!cor.length) {
       Q = smooth(Q, n, true, fixed, heavy, true);
       const ell = n >= 12 ? fitEllipse(Q, n) : null;
@@ -2375,7 +2398,7 @@ function makeFitter(W1, s, o) {
     return a;
   }
 
-  function corners(Q, n, closedPath) {
+  function corners(Q, n, closedPath, wide = 0) {
     const k = closedPath ? Math.min(K, Math.max(1, (n - 1) >> 1)) : K;
     if (n < 5) return [];
     // Sudut belok di titik i dengan jendela ±w.
@@ -2388,7 +2411,8 @@ function makeFitter(W1, s, o) {
       if (la < 1e-9 || lb < 1e-9) return 0;
       return Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb))));
     };
-    const k2 = closedPath ? Math.min(2 * k, Math.max(1, (n - 1) >> 1)) : 2 * k;
+    const k2w = Math.max(2 * k, roughPasses ? wide : 0);
+    const k2 = closedPath ? Math.min(k2w, Math.max(1, (n - 1) >> 1)) : k2w;
     const ang = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       if (!closedPath && (i === 0 || i === n - 1)) continue;

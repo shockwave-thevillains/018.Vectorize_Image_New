@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611081437';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611090258';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -6,6 +6,7 @@ const DEFAULTS = {
   gradColors: 64,
   lineStrokes: true,
   clean: true,
+  rough: 2,
   silTones: 'gray',
   silThreshold: 128,
   cavity: 'white',
@@ -29,7 +30,7 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
-const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'clean', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'clean', 'rough', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -66,6 +67,7 @@ function procOpts() {
     gradColors: S.gradColors,
     lineStrokes: S.lineStrokes,
     clean: S.clean,
+    rough: S.rough,
     silTones: S.silTones,
     silThreshold: S.silThreshold,
     cavity: S.cavity,
@@ -165,7 +167,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611081437');
+  const w = new Worker('worker.js?v=202611090258');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -185,7 +187,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611081437', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611090258', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -955,6 +957,7 @@ function bindSettings() {
 const LABELS = {
   colorMerge: (v) => `ΔE ${v}`,
   smooth: (v) => `${Number(v).toFixed(2)} px`,
+  rough: (v) => (Number(v) ? `${Number(v).toFixed(1)} px` : 'mati'),
   minArea: (v) => `${v} px²`,
   corner: (v) => `${v}°`,
   whiteTol: (v) => `ΔE ${v}`,
