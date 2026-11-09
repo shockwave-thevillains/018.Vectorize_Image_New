@@ -206,8 +206,9 @@ async function vectorize(file, o, progress, aiMask) {
   // sepanjang tepi kuas) dihaluskan dengan filter mayoritas berjangkauan
   // o.rough px sumber, lalu sisa bintiknya dibuang.
   if (o.rough > 0) {
-    majorityFilter(lab, W, H, Math.max(1, Math.round(o.rough * s)), 2, null, 0);
-    despeckle(lab, W, H, Math.max(minA, Math.round((o.rough * s) ** 2 * 3)), comp, order, pal, null);
+    // Hanya di antara warna yang mirip: garis tipis berkontras (outline) tidak terkikis.
+    majorityFilter(lab, W, H, Math.max(1, Math.round(o.rough * s)), 2, pal, 20);
+    despeckle(lab, W, H, Math.max(minA, Math.round((o.rough * s) ** 2 * 3)), comp, order, pal, { de: 22, min: Math.max(2, Math.round(3 * s * s)) });
   }
   progress(0.45, 'bersih');
 
@@ -2473,6 +2474,13 @@ function makeFitter(W1, s, o) {
   const mergeAng = 9 * (Math.PI / 180);
   const sharpMin = 7 * s;
   const sharpAng = 25 * (Math.PI / 180);
+  // Luruskan garis panjang: tepi yang bergerigi/bergelombang tetapi bila ditarik
+  // garis panjang memang lurus (gelombang tersebar di kedua sisi, tidak condong
+  // ke satu sisi seperti busur) dijadikan satu garis lurus. Toleransi tumbuh
+  // dengan panjang garis: 2,5 % panjangnya, maks. 2 px sumber.
+  const longOn = o.straighten === true;
+  const longMin = 18 * s;
+  const longTol = (L) => Math.min(2 * s, Math.max(runMaxDev, 0.025 * L));
 
   function lineOk(Q, i, j) {
     const ax = Q[i * 2], ay = Q[i * 2 + 1];
@@ -2491,11 +2499,48 @@ function makeFitter(W1, s, o) {
     return L;
   }
 
+  // Garis panjang hampir lurus: simpangan <= longTol(L) dan tidak condong ke
+  // satu sisi, baik secara keseluruhan maupun per seperempat panjangnya
+  // (busur dan lengkung-S ditolak).
+  function lineOkLong(Q, i, j) {
+    const ax = Q[i * 2], ay = Q[i * 2 + 1];
+    const dx = Q[j * 2] - ax, dy = Q[j * 2 + 1] - ay;
+    const L = Math.hypot(dx, dy);
+    if (L < longMin) return 0;
+    const tol = longTol(L);
+    const n = j - i - 1;
+    if (n < 8) return 0;
+    const qs = [0, 0, 0, 0], qn = [0, 0, 0, 0];
+    let sum = 0;
+    for (let k = i + 1; k < j; k++) {
+      const d = ((Q[k * 2] - ax) * dy - (Q[k * 2 + 1] - ay) * dx) / L;
+      if (d > tol || d < -tol) return 0;
+      sum += d;
+      const q = Math.min(3, (((k - i - 1) * 4) / n) | 0);
+      qs[q] += d; qn[q]++;
+    }
+    if (Math.abs(sum / n) > 0.22 * tol) return 0;
+    for (let q = 0; q < 4; q++) if (qn[q] && Math.abs(qs[q] / qn[q]) > 0.45 * tol) return 0;
+    return L;
+  }
+
   function findRuns(Q, a, b) {
     const runs = [];
     const step = Math.max(1, Math.round(s));
     let i = a;
     while (i < b - 2) {
+      if (longOn) {
+        // Coba garis panjang dulu dari titik ini.
+        let j = Math.min(b, i + Math.ceil(longMin * 1.1));
+        if (lineOkLong(Q, i, j)) {
+          let good = j;
+          while (good < b) { const nj = Math.min(b, good + step); if (lineOkLong(Q, i, nj)) good = nj; else break; }
+          while (good < b && lineOkLong(Q, i, good + 1)) good++;
+          runs.push({ i0: i, i1: good, p0: [Q[i * 2], Q[i * 2 + 1]], p1: [Q[good * 2], Q[good * 2 + 1]], long: 1 });
+          i = good;
+          continue;
+        }
+      }
       let j = Math.min(b, i + Math.ceil(minRun));
       const L = lineOk(Q, i, j);
       if (!L || L < minRun * 0.85) { i += step; continue; }
@@ -2511,8 +2556,8 @@ function makeFitter(W1, s, o) {
       const d1 = norm(r1.p1[0] - r1.p0[0], r1.p1[1] - r1.p0[1]);
       const d2 = norm(r2.p1[0] - r2.p0[0], r2.p1[1] - r2.p0[1]);
       const ang = Math.acos(Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])));
-      if (ang < mergeAng && arcLen(Q, r1.i1, r2.i0) <= sharpGap && maxDev(Q, r1.i0, r2.i1) <= runMaxDev * 1.6) {
-        runs.splice(k, 2, { i0: r1.i0, i1: r2.i1, p0: r1.p0, p1: r2.p1 });
+      if (ang < mergeAng && arcLen(Q, r1.i1, r2.i0) <= sharpGap && (maxDev(Q, r1.i0, r2.i1) <= runMaxDev * 1.6 || (longOn && (r1.long || r2.long) && lineOkLong(Q, r1.i0, r2.i1)))) {
+        runs.splice(k, 2, { i0: r1.i0, i1: r2.i1, p0: r1.p0, p1: r2.p1, long: r1.long || r2.long });
       } else k++;
     }
     return runs;
