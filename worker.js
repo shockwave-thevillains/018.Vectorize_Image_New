@@ -645,13 +645,30 @@ function chromaKey(px, w, h, key, tol) {
   for (let i = 0, p = 0; i < N; i++, p += 4) {
     d[i] = px[p + 3] < 16 ? 0 : Math.hypot(px[p] - key[0], px[p + 1] - key[1], px[p + 2] - key[2]);
   }
+  // Pinggiran campuran hanya ada di dekat latar kunci yang sebenarnya (<= 4 px
+  // dari piksel yang pasti kunci). Warna objek yang kebetulan mirip kunci
+  // (biru-ungu) di tengah gambar tidak disentuh.
+  const near = new Uint8Array(N);
+  let fr = [];
+  for (let i = 0; i < N; i++) if (d[i] <= t0) { near[i] = 1; fr.push(i); }
+  for (let step = 0; step < 4 && fr.length; step++) {
+    const nx = [];
+    for (const i of fr) {
+      const x = i % w;
+      if (x > 0 && !near[i - 1]) { near[i - 1] = 1; nx.push(i - 1); }
+      if (x < w - 1 && !near[i + 1]) { near[i + 1] = 1; nx.push(i + 1); }
+      if (i >= w && !near[i - w]) { near[i - w] = 1; nx.push(i - w); }
+      if (i < N - w && !near[i + w]) { near[i + w] = 1; nx.push(i + w); }
+    }
+    fr = nx;
+  }
   const R = 3;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x, p = i * 4;
       const di = d[i];
       if (di <= t0) { px[p + 3] = 0; continue; }
-      if (di >= t1) continue;
+      if (di >= t1 || !near[i]) continue;
       // Warna objek murni: tetangga terdekat yang jauh dari kunci.
       let best = -1, bd = Infinity;
       for (let dy = -R; dy <= R; dy++) {
@@ -949,7 +966,16 @@ function buildPalette(px, w, h, o) {
       let m = 0;
       for (let dr = -1; dr <= 1; dr++) for (let dg = -1; dg <= 1; dg++) for (let db = -1; db <= 1; db++) {
         const r = r0 + dr, g = g0 + dg, b = b0 + db;
-        if (r >= 0 && g >= 0 && b >= 0 && r < 32 && g < 32 && b < 32) m += strict[(r << 10) | (g << 5) | b];
+        if (r < 0 || g < 0 || b < 0 || r > 31 || g > 31 || b > 31) continue;
+        const key = (r << 10) | (g << 5) | b;
+        if (!strict[key]) continue;
+        // Hanya piksel rata yang memang paling dekat ke warna ini (bukan milik
+        // warna tetangga yang mirip, mis. ungu sedotan di sebelah peralihan).
+        let own = true;
+        const L = bl[key * 3], A = bl[key * 3 + 1], Bb = bl[key * 3 + 2];
+        const dc = (c.L - L) ** 2 + (c.A - A) ** 2 + (c.B - Bb) ** 2;
+        for (let j = 0; j < P.length && own; j++) if (j !== k && (P[j].L - L) ** 2 + (P[j].A - A) ** 2 + (P[j].B - Bb) ** 2 < dc) own = false;
+        if (own) m += strict[key];
       }
       if (m >= 0.5 * c.n) continue;
     }
