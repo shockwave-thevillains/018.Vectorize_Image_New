@@ -36,6 +36,8 @@ jadi bisa di-host gratis di GitHub Pages.
 
 - **Kurva hemat titik** (bawaan aktif, mode Warna & Siluet): tepi dihitung sub-piksel dari gambar asli (titik 50 % antara dua warna / alpha 50 %), lalu tiap batas dijadikan poligon dengan sisi sesedikit mungkin (pemrograman dinamis, gaya Potrace), titik sudutnya digeser ke perpotongan garis kuadrat-terkecil, belokan tajam menjadi sudut runcing dan sisanya kurva halus; kurva searah digabung selama simpangannya kecil. Bentuk bulat tanpa sudut menjadi elips utuh. Pada 11 gambar uji: 10–25 % lebih sedikit titik dan tepi lebih akurat di 8 dari 11.
 
+- **Sederhanakan bayangan** (mode Warna: Mati / Ringan / Kuat, bawaan Mati): bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) dilebur ke tetangganya; outline dan batas kontras tidak disentuh. Ruang kerja (Ringan): 5.047 → 3.982 bentuk, 23.997 → 18.573 titik, dengan sebagian nuansa bayangan hilang.
+
 ## Uji kualitas (tools/)
 
 `tools/bench.cjs` + `tools/bench.html` mengukur tiap gambar uji: selisih warna hasil vs asli (seluruh gambar dan di tepi), jumlah bentuk & titik, serta kerataan kurva (belokan dan titik balik per 100 px). Taruh gambar di `test-images/`, sajikan folder ini (`python3 -m http.server 8767`), lalu `node tools/bench.cjs 8767 hasil.json`.

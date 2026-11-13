@@ -202,6 +202,13 @@ async function vectorize(file, o, progress, aiMask) {
   // Rapikan: bentuk sempit berwarna campuran dua tetangganya (sisa antialias di
   // ujung goresan, pinggiran garis) dilebur ke tetangga yang paling mirip.
   if (clean) dropSlivers(lab, W, H, pal, s, comp, order, 2.2, 0.2, 6);
+  // Penyederhanaan menurut kekuatan tepi: bercak (bayangan lembut, gradasi
+  // berpita) yang batasnya dengan tetangga lemah di gambar asli dan warnanya
+  // mirip dilebur ke tetangga terbesar. Batas kontras (outline) tidak disentuh.
+  if (clean && o.simplify > 0) {
+    const lv = o.simplify >= 2;
+    mergeWeak(lab, data, W, H, pal, s, comp, order, lv ? 40 : 30, lv ? 20 : 16, (lv ? 0.01 : 0.004) * W * H);
+  }
   // Tepi kasar: tonjolan & lekukan kecil di semua batas (juga bercak warna di
   // sepanjang tepi kuas) dihaluskan dengan filter mayoritas berjangkauan
   // o.rough px sumber, lalu sisa bintiknya dibuang.
@@ -1626,7 +1633,7 @@ function label(lab, W, H, comp, order) {
 // dilebur — batas "tingkat palet" yang berkeliaran di area datar hilang, batas
 // yang memang ada di gambar tetap. Warna gabungan = warna bagian terluas, dan
 // selisihnya dari warna itu dibatasi supaya gradasi tidak ikut hilang.
-function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8) {
+function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8, maxArea = Infinity) {
   const info = label(lab, W, H, comp, order);
   const n = info.count, N = W * H;
   const k = Math.max(1, Math.round(s));
@@ -1672,6 +1679,7 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
     const a = find(a0), b = find(b0);
     if (a === b || dE(col[a], col[b]) > maxDE) continue;
     const big = area[a] >= area[b] ? a : b, small = big === a ? b : a;
+    if (area[small] > maxArea) continue;
     par[small] = big; area[big] += area[small];
     merged++;
   }

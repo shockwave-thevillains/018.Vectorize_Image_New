@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611131322">
+  <link rel="stylesheet" href="styles.css?v=202611131414">
 </head>
 <body>
   <header class="top">
@@ -175,6 +175,14 @@
             <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="straighten"><span><b>Luruskan garis panjang</b><small>Tepi yang bergerigi tetapi bila ditarik garis panjang memang lurus dijadikan satu garis lurus. Lengkungan tetap lengkung.</small></span></label>
           </div>
+          <div class="field" data-show="color">
+            <div class="flabel">Sederhanakan bayangan<span class="help" tabindex="0" role="note" data-tip="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang." aria-label="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang.">?</span></div>
+            <div class="seg wide" data-opt="simplify">
+              <button type="button" data-v="0">Mati</button>
+              <button type="button" data-v="1">Ringan</button>
+              <button type="button" data-v="2">Kuat</button>
+            </div>
+          </div>
           <div class="field" data-show="color silhouette">
             <label class="check"><input type="checkbox" data-opt="polyFit"><span><b>Kurva hemat titik</b><small>Mesin kurva baru: tepi dihitung sub-piksel dari gambar asli, lalu dibentuk poligon dengan sisi sesedikit mungkin dan dihaluskan (gaya Potrace). Titik lebih sedikit, sudut runcing tetap runcing.</small></span></label>
           </div>
@@ -296,6 +304,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611131322"></script>
+  <script type="module" src="app.js?v=202611131414"></script>
 </body>
 </html>
