@@ -101,24 +101,30 @@ const hiddenOf = (res, opt) => opt.hidden || defaultHidden(res);
 function shapes(res, opt) {
   const pal = res.palette.map((c, k) => (opt.recolor && opt.recolor[k]) || c);
   const hidden = hiddenOf(res, opt);
+  const colorOf = (i) => (opt.regionColor && opt.regionColor[i]) || pal[res.regions[i].k];
   const list = [];
   if (opt.stacking === 'cutout') {
     // Satu compound path per warna (region tidak saling tumpang tindih).
     const byColor = new Map();
     res.regions.forEach((r, i) => {
       if (hidden[i]) return;
-      if (!byColor.has(r.k)) byColor.set(r.k, { subs: [], regions: [] });
-      const g = byColor.get(r.k);
+      // Dikelompokkan per warna akhir (warna region yang diwarnai/digabung ikut).
+      const col = colorOf(i);
+      const key = hex(col);
+      if (!byColor.has(key)) byColor.set(key, { color: col, subs: [], regions: [] });
+      const g = byColor.get(key);
       g.subs.push(...r.subs);
       g.regions.push(i);
     });
-    for (const [k, g] of byColor) list.push({ color: pal[k], subs: g.subs, regions: g.regions });
+    for (const g of byColor.values()) list.push({ color: g.color, subs: g.subs, regions: g.regions });
   } else {
     // Tumpuk: lubang diisi kecuali berbatasan dengan region tersembunyi/transparan.
     res.regions.forEach((r, i) => {
-      if (hidden[i]) return;
+      // Bentuk yang digabung ke tetangga yang mengelilinginya tidak perlu digambar:
+      // tetangga itu sudah mengisi lubangnya (mode tumpuk).
+      if (hidden[i] || (opt.absorbed && opt.absorbed[i])) return;
       const subs = r.subs.filter((s) => s.outer || !s.fill || touchesHidden(res, s, i, hidden));
-      list.push({ color: pal[r.k], subs, regions: [i] });
+      list.push({ color: colorOf(i), subs, regions: [i] });
     });
   }
   // Urutan gambar tiap region (untuk pengisi celah: hanya meluas ke bawah bentuk sesudahnya).

@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611131414';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611131427';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -175,7 +175,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611131414');
+  const w = new Worker('worker.js?v=202611131427');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -195,7 +195,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611131414', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611131427', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -293,6 +293,7 @@ function onWorker(wk, msg) {
     it.key = job.key;
     it.outline = null;
     it.paths = new Map();
+    it.adj = null;
     predictItem(it);
     if (prev) remapOverrides(it, prev.palette, msg.result.palette);
     updateRow(it);
@@ -406,18 +407,81 @@ function regionAt(res, sx, sy) {
   const y = Math.max(0, Math.min(res.rmapH - 1, Math.floor(sy * q)));
   return res.rmap[y * res.rmapW + x];
 }
-function hiddenFor(it) {
+// Suntingan disimpan sebagai titik (koordinat sumber) agar tetap berlaku setelah
+// gambar diproses ulang: [x, y] = hapus/kembalikan; [x, y, 'm', tx, ty] = gabung
+// region di (x, y) ke region di (tx, ty); [x, y, 'c', r, g, b] = warnai region.
+function editState(it) {
   const res = it.result;
+  const n = res.regions.length;
   const h = defaultHidden(res);
   if (S.learn && S.bgKey === 'white' && it.learned) it.learned.forEach((v, i) => { if (v >= 0) h[i] = v; });
   res.regions.forEach((r, i) => { if (it.hide.has(r.k)) h[i] = 1; });
-  for (const [sx, sy] of it.toggles) {
-    const i = regionAt(res, sx, sy);
-    if (i >= 0) h[i] ^= 1;
+  const par = Int32Array.from({ length: n }, (_, i) => i);
+  const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+  const col = new Array(n).fill(null);
+  let merged = false;
+  for (const ed of it.toggles) {
+    const i = regionAt(res, ed[0], ed[1]);
+    if (i < 0) continue;
+    if (ed[2] === 'm') {
+      const j = regionAt(res, ed[3], ed[4]);
+      if (j < 0) continue;
+      const a = find(i), b = find(j);
+      if (a !== b) { par[a] = b; merged = true; }
+    } else if (ed[2] === 'c') {
+      col[find(i)] = [ed[3], ed[4], ed[5]];
+    } else {
+      h[find(i)] ^= 1;
+    }
   }
-  return h;
+  const pal = res.palette.map((c, k) => it.recolor[k] || c);
+  const regionColor = new Array(n);
+  let any = false;
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (r !== i) h[i] = h[r];
+    const c = col[r] || (r !== i ? pal[res.regions[r].k] : null);
+    if (c) { regionColor[i] = c; any = true; }
+  }
+  // Region gabungan yang seluruh batasnya hanya dengan satu region dari kelompok
+  // yang sama → tidak digambar di mode tumpuk (lubang tetangganya sudah terisi).
+  let absorbed = null;
+  if (merged) {
+    absorbed = new Uint8Array(n);
+    const only = new Int32Array(n).fill(-2);
+    for (const ch of res.chains) {
+      for (const [p, q] of [[ch.a, ch.b], [ch.b, ch.a]]) {
+        if (p < 0) continue;
+        if (q < 0) only[p] = -1;
+        else if (only[p] === -2) only[p] = q;
+        else if (only[p] !== q) only[p] = -1;
+      }
+    }
+    for (let i = 0; i < n; i++) if (only[i] >= 0 && find(only[i]) === find(i)) absorbed[i] = 1;
+  }
+  return { hidden: h, regionColor: any ? regionColor : null, absorbed, find };
 }
-const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${[...it.hide].join(',')}:${S.learn ? learnedCount(it) : 0}`;
+function hiddenFor(it) { return editState(it).hidden; }
+
+// Tetangga dengan batas bersama terpanjang (yang tampil) → target "Gabung".
+function mergeTarget(it, i) {
+  const res = it.result;
+  if (!it.adj) {
+    it.adj = new Map();
+    const add = (p, q, w) => { let m = it.adj.get(p); if (!m) it.adj.set(p, (m = new Map())); m.set(q, (m.get(q) || 0) + w); };
+    for (const ch of res.chains) if (ch.a >= 0 && ch.b >= 0) { add(ch.a, ch.b, ch.p.length); add(ch.b, ch.a, ch.p.length); }
+  }
+  const st = editState(it);
+  const m = it.adj.get(i);
+  if (!m) return -1;
+  let best = -1, bw = 0;
+  for (const [j, w] of m) {
+    if (st.hidden[j] || st.find(j) === st.find(i)) continue;
+    if (w > bw) { bw = w; best = j; }
+  }
+  return best;
+}
+const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${it.toggles.length ? it.toggles[it.toggles.length - 1].join('/') : ''}:${[...it.hide].join(',')}:${S.learn ? learnedCount(it) : 0}`;
 function editsChanged(it) {
   it.outline = null;
   updateRow(it);
@@ -702,7 +766,8 @@ function renderViewer() {
     // Kandidat: area putih di dalam gambar (tidak menyentuh tepi) yang masih tampil.
     let cand = '';
     if (S.bgKey === 'white') res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
-    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden, gapFill: S.gapFill })}`
+    const ed = editState(it);
+    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden, gapFill: S.gapFill, regionColor: ed.regionColor, absorbed: ed.absorbed })}`
       + (cand ? `<path class="cand" d="${cand}"/>` : '') + '</g>';
     vOut.dataset.for = vLensOut.dataset.for = '';
     const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
@@ -770,6 +835,39 @@ function renderPalette(it) {
   $('#redoClick').disabled = !it.redo.length;
   $('#resetClicks').disabled = !it.toggles.length;
 }
+// Alat sunting: hapus (bawaan) / gabung / warnai.
+let tool = 'erase';
+let paintColor = [255, 91, 20];
+// Satu titik di dalam region (koordinat sumber), dari peta region.
+function regionPoint(res, j) {
+  const q = res.rmapW / res.srcW;
+  const m = res.rmap;
+  let bx = -1, by = -1;
+  // Titik terdalam sederhana: cari piksel region yang keempat tetangganya juga region itu.
+  for (let y = 1; y < res.rmapH - 1 && bx < 0; y++) {
+    for (let x = 1; x < res.rmapW - 1; x++) {
+      const k = y * res.rmapW + x;
+      if (m[k] === j && m[k - 1] === j && m[k + 1] === j && m[k - res.rmapW] === j && m[k + res.rmapW] === j) { bx = x; by = y; break; }
+    }
+  }
+  if (bx < 0) for (let k = 0; k < m.length; k++) if (m[k] === j) { bx = k % res.rmapW; by = (k / res.rmapW) | 0; break; }
+  return bx < 0 ? null : [(bx + 0.5) / q, (by + 0.5) / q];
+}
+function setTool(t) {
+  tool = t;
+  $$('#tools button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)));
+  $('#paintColor').hidden = t !== 'paint';
+  $('.phint').textContent = {
+    erase: 'Klik bentuk untuk menghapus / mengembalikan',
+    merge: 'Klik bentuk untuk melebur ke tetangga bergaris biru',
+    paint: 'Klik bentuk untuk mewarnai · Alt+klik = ambil warna',
+  }[t];
+  hoverRegion = -2;
+  updateHover();
+}
+$$('#tools button').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('#paintColor').addEventListener('input', (e) => { const v = e.target.value; paintColor = [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)); });
+
 function undoClick() {
   const it = selected();
   if (!it || !it.toggles.length) return;
@@ -862,7 +960,12 @@ function updateHover() {
   stage.classList.toggle('pick', i >= 0);
   if (i < 0) { vHi.innerHTML = ''; return; }
   const d = regionPathCached(it, i);
-  vHi.innerHTML = `<g transform="${groupTransform(it.result)}"><path d="${d}"/></g>`;
+  let extra = '';
+  if (tool === 'merge') {
+    const j = mergeTarget(it, i);
+    if (j >= 0) extra = `<path class="target" d="${regionPathCached(it, j)}"/>`;
+  }
+  vHi.innerHTML = `<g transform="${groupTransform(it.result)}">${extra}<path d="${d}"/></g>`;
 }
 const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
 // Klik tanpa geser = hapus/kembalikan region di titik itu (seperti koreksi latar vectorizer.ai).
@@ -877,8 +980,27 @@ stage.addEventListener('pointerup', (e) => {
   if (V.mode === 'side' && mx < paneOff()) return;
   const sx = (localX(mx) - V.px) / V.z, sy = (my - V.py) / V.z;
   if (sx < 0 || sy < 0 || sx >= it.srcW || sy >= it.srcH) return;
-  if (regionAt(it.result, sx, sy) < 0) return;
-  it.toggles = [...it.toggles, [sx, sy]];
+  const ri = regionAt(it.result, sx, sy);
+  if (ri < 0) return;
+  let ed = [sx, sy];
+  if (tool === 'paint' && e.altKey) {
+    // Alt+klik = ambil warna bentuk ini.
+    const st = editState(it);
+    const c = (st.regionColor && st.regionColor[ri]) || it.recolor[it.result.regions[ri].k] || it.result.palette[it.result.regions[ri].k];
+    paintColor = c.slice();
+    $('#paintColor').value = hex(paintColor);
+    return;
+  }
+  if (tool === 'merge') {
+    const j = mergeTarget(it, ri);
+    if (j < 0) return;
+    const p = regionPoint(it.result, j);
+    if (!p) return;
+    ed = [sx, sy, 'm', p[0], p[1]];
+  } else if (tool === 'paint') {
+    ed = [sx, sy, 'c', ...paintColor];
+  }
+  it.toggles = [...it.toggles, ed];
   it.redo = [];
   editsChanged(it);
 });
@@ -929,6 +1051,8 @@ window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens', b: 'bg', B: 'bg' };
   if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
+  const tools = { h: 'erase', g: 'merge', w: 'paint', H: 'erase', G: 'merge', W: 'paint' };
+  if (tools[e.key] && selected()) { setTool(tools[e.key]); return; }
   const modes = { c: 'compare', s: 'side', v: 'vector', o: 'outline' };
   if (modes[e.key] && selected()) setMode(modes[e.key]);
 });
@@ -1095,7 +1219,7 @@ function exportOpts(it) {
     gapFill: S.gapFill,
     gapWidth: GAP_WIDTH,
     recolor: it.recolor,
-    hidden: hiddenFor(it),
+    ...(() => { const ed = editState(it); return { hidden: ed.hidden, regionColor: ed.regionColor, absorbed: ed.absorbed }; })(),
   };
 }
 
