@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611131427';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611131428';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -175,7 +175,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611131427');
+  const w = new Worker('worker.js?v=202611131428');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -195,7 +195,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611131427', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611131428', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -806,7 +806,7 @@ function renderPalette(it) {
     const cur = it.recolor[k] || c;
     const off = it.hide.has(k);
     const el = document.createElement('span');
-    el.className = 'sw' + (off ? ' off' : '') + (it.recolor[k] ? ' changed' : '');
+    el.className = 'sw' + (off ? ' off' : '') + (it.recolor[k] ? ' changed' : '') + (mergeSrc === k ? ' src' : '');
     el.innerHTML = `<button type="button" class="chip" title="Ganti warna"></button><span>${hex(cur).toUpperCase()}</span>`
       + (it.recolor[k] ? '<button type="button" class="x" data-a="reset" title="Kembalikan warna asli">↺</button>' : '')
       + `<button type="button" class="x" data-a="hide" title="${off ? 'Tampilkan lagi' : 'Jadikan transparan'}">${off ? '+' : '×'}</button>`;
@@ -822,6 +822,18 @@ function renderPalette(it) {
         delete it.recolor[k];
         renderViewer();
         updateRow(it);
+      } else if (tool === 'merge') {
+        // Gabung warna: klik warna sumber, lalu warna tujuan → semua bentuk
+        // berwarna sumber memakai warna tujuan (mode Potong: satu path per warna).
+        if (mergeSrc === null || mergeSrc === k) { mergeSrc = mergeSrc === k ? null : k; renderPalette(it); return; }
+        it.recolor[mergeSrc] = (it.recolor[k] || it.result.palette[k]).slice();
+        mergeSrc = null;
+        it.outline = null;
+        renderViewer();
+        updateRow(it);
+      } else if (tool === 'paint') {
+        paintColor = cur.slice();
+        $('#paintColor').value = hex(cur);
       } else {
         pickTarget = { it, k };
         picker.value = hex(cur);
@@ -837,6 +849,7 @@ function renderPalette(it) {
 }
 // Alat sunting: hapus (bawaan) / gabung / warnai.
 let tool = 'erase';
+let mergeSrc = null;
 let paintColor = [255, 91, 20];
 // Satu titik di dalam region (koordinat sumber), dari peta region.
 function regionPoint(res, j) {
@@ -859,9 +872,11 @@ function setTool(t) {
   $('#paintColor').hidden = t !== 'paint';
   $('.phint').textContent = {
     erase: 'Klik bentuk untuk menghapus / mengembalikan',
-    merge: 'Klik bentuk untuk melebur ke tetangga bergaris biru',
-    paint: 'Klik bentuk untuk mewarnai · Alt+klik = ambil warna',
+    merge: 'Klik bentuk untuk melebur ke tetangga bergaris biru · klik 2 warna palet untuk menggabungkannya',
+    paint: 'Klik bentuk untuk mewarnai · klik warna palet / Alt+klik bentuk = ambil warna',
   }[t];
+  mergeSrc = null;
+  if (selected() && selected().result) renderPalette(selected());
   hoverRegion = -2;
   updateHover();
 }

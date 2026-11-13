@@ -322,6 +322,7 @@ img.orig { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-ren
 .phint { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .tools-seg { flex: none; }
 .tools-seg button { padding: 0 10px; height: 28px; font-size: 12px; }
+.sw.src { box-shadow: 0 0 0 2px #2f7bff; }
 #paintColor { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: none; flex: none; }
 .layer.hi path.target { fill: rgb(25 120 255 / 0.18); stroke: #2f7bff; stroke-dasharray: 5 3; }
 .edits { display: flex; align-items: center; gap: 2px; margin-left: auto; }

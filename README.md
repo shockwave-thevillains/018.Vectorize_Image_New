@@ -24,7 +24,8 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Alat sunting** (bilah palet, langsung tanpa proses ulang, bisa diurungkan):
   - *Hapus* (H): hapus/kembalikan bentuk.
   - *Gabung* (G): lebur bentuk ke tetangga dengan batas bersama terpanjang (ditandai garis putus-putus biru saat kursor di atasnya). Bentuk yang terkurung sepenuhnya oleh tetangganya tidak lagi digambar (mode Tumpuk), jadi file lebih ringkas.
-  - *Warnai* (W): beri satu bentuk warna sendiri; Alt+klik mengambil warna bentuk.
+  - *Warnai* (W): beri satu bentuk warna sendiri; Alt+klik bentuk atau klik warna palet untuk mengambil warna.
+  - *Gabung warna*: dalam mode Gabung, klik satu warna palet lalu warna tujuan — semua bentuk berwarna itu memakai warna tujuan.
   - Suntingan disimpan sebagai titik, jadi tetap berlaku setelah gambar diproses ulang.
 - **Belajar dari hasil akhir**: saat mengunduh, keadaan akhir tiap area putih (dihapus/tidak) dicatat bersama sidiknya (ukuran, kontak garis/latar, objek di seberang garis, bentuk). Gambar berikutnya dengan gaya serupa otomatis mengikuti (k-tetangga terdekat; koreksi Anda berbobot lebih). Klik coba-coba tidak dihitung. Tersimpan di browser ini saja; bisa dihapus dengan tombol *Lupakan*.
 - **Tombol Proses**: unggah dan ubah pengaturan tidak langsung memproses; klik *Proses* setelah selesai mengatur.

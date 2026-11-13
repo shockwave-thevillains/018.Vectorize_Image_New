@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611131427">
+  <link rel="stylesheet" href="styles.css?v=202611131428">
 </head>
 <body>
   <header class="top">
@@ -75,14 +75,14 @@
         </div>
 
         <div class="palette" id="palette" hidden>
-          <span class="plabel mono">Palet</span>
-          <div class="swatches" id="swatches"></div>
           <span class="seg tools-seg" id="tools" role="radiogroup" aria-label="Alat sunting">
             <button type="button" data-tool="erase" aria-pressed="true" title="Hapus / kembalikan bentuk (H)">Hapus</button>
             <button type="button" data-tool="merge" aria-pressed="false" title="Lebur bentuk ke tetangganya (G)">Gabung</button>
             <button type="button" data-tool="paint" aria-pressed="false" title="Warnai satu bentuk (W) · Alt+klik = ambil warna">Warnai</button>
           </span>
           <input type="color" id="paintColor" value="#ff5b14" title="Warna kuas" hidden>
+          <span class="plabel mono">Palet</span>
+          <div class="swatches" id="swatches"></div>
           <span class="phint">Klik bentuk untuk menghapus / mengembalikan</span>
           <span class="edits">
             <button type="button" class="icon" id="undoClick" title="Urungkan (Ctrl+Z)" disabled><svg viewBox="0 0 16 16"><path d="M6 4 2.5 7.5 6 11M3 7.5h6.5a3.5 3.5 0 0 1 0 7H8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
@@ -310,6 +310,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611131427"></script>
+  <script type="module" src="app.js?v=202611131428"></script>
 </body>
 </html>
