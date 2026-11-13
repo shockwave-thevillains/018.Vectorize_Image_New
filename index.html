@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611090935">
+  <link rel="stylesheet" href="styles.css?v=202611131322">
 </head>
 <body>
   <header class="top">
@@ -175,6 +175,9 @@
             <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="straighten"><span><b>Luruskan garis panjang</b><small>Tepi yang bergerigi tetapi bila ditarik garis panjang memang lurus dijadikan satu garis lurus. Lengkungan tetap lengkung.</small></span></label>
           </div>
+          <div class="field" data-show="color silhouette">
+            <label class="check"><input type="checkbox" data-opt="polyFit"><span><b>Kurva hemat titik</b><small>Mesin kurva baru: tepi dihitung sub-piksel dari gambar asli, lalu dibentuk poligon dengan sisi sesedikit mungkin dan dihaluskan (gaya Potrace). Titik lebih sedikit, sudut runcing tetap runcing.</small></span></label>
+          </div>
           <div class="field">
             <label class="flabel" for="smooth">Kehalusan kurva<span class="help" tabindex="0" role="note" data-tip="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat." aria-label="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat.">?</span> <output class="mono" for="smooth"></output></label>
             <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
@@ -293,6 +296,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611090935"></script>
+  <script type="module" src="app.js?v=202611131322"></script>
 </body>
 </html>

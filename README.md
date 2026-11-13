@@ -34,6 +34,12 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Penampil**: Bandingkan (geser pembatas), **Berdampingan** (keduanya tanpa penanda oranye agar hasil terlihat apa adanya) (asli kiri, vektor kanan; zoom dan geser bersamaan, tanda silang menunjukkan titik yang sama di panel seberang; tombol **S**), Vektor, Garis (outline), zoom, 1:1, lensa piksel, latar pratinjau gelap/terang (tombol atau tombol keyboard **B**; hanya tampilan, tidak memproses ulang).
 - **Susunan**: Tumpuk (bentuk bersarang tanpa retak) atau Potong (tanpa tumpang tindih), plus pengisi celah: tiap bentuk mendapat garis sewarna yang meluas ke bawah bentuk yang digambar sesudahnya, jadi tidak ada retakan saat dilihat diperkecil dan tidak ada bentuk yang menebal.
 
+- **Kurva hemat titik** (bawaan aktif, mode Warna & Siluet): tepi dihitung sub-piksel dari gambar asli (titik 50 % antara dua warna / alpha 50 %), lalu tiap batas dijadikan poligon dengan sisi sesedikit mungkin (pemrograman dinamis, gaya Potrace), titik sudutnya digeser ke perpotongan garis kuadrat-terkecil, belokan tajam menjadi sudut runcing dan sisanya kurva halus; kurva searah digabung selama simpangannya kecil. Bentuk bulat tanpa sudut menjadi elips utuh. Pada 11 gambar uji: 10–25 % lebih sedikit titik dan tepi lebih akurat di 8 dari 11.
+
+## Uji kualitas (tools/)
+
+`tools/bench.cjs` + `tools/bench.html` mengukur tiap gambar uji: selisih warna hasil vs asli (seluruh gambar dan di tepi), jumlah bentuk & titik, serta kerataan kurva (belokan dan titik balik per 100 px). Taruh gambar di `test-images/`, sajikan folder ini (`python3 -m http.server 8767`), lalu `node tools/bench.cjs 8767 hasil.json`.
+
 ## Cara kerja tracing
 
 1. **Penghalusan searah garis**: arah tiap tepi dihitung (tensor struktur), lalu warna dirata-ratakan sepanjang garis — getaran tepi akibat kompresi hilang tanpa menipiskan garis.
