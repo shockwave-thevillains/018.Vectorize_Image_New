@@ -302,6 +302,16 @@ export function previewMarkup(res, opt) {
   const items = shapes(res, opt);
   const hidden = hiddenOf(res, opt);
   const parts = [];
+  // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk, sama seperti
+  // ekspor — tanpa ini, batas dua bentuk bersebelahan tampak sebagai garis tipis
+  // terang (antialias kedua tepi membuat latar ikut terlihat).
+  if (opt.gapFill && res.mode !== 'gradient') {
+    for (const it of items) {
+      const d = [];
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1))) d.push(g.text());
+      if (d.length) parts.push(`<path fill="none" stroke="${hex(it.color)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" d="${d.join('')}"/>`);
+    }
+  }
   for (const it of items) {
     const sk = svgSink(1, 1);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
