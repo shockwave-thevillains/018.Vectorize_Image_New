@@ -202,6 +202,7 @@ async function vectorize(file, o, progress, aiMask) {
   // Rapikan: bentuk sempit berwarna campuran dua tetangganya (sisa antialias di
   // ujung goresan, pinggiran garis) dilebur ke tetangga yang paling mirip.
   if (clean) dropSlivers(lab, W, H, pal, s, comp, order, 2.2, 0.2, 6);
+  if (clean && o.thinDrop !== false) dropThin(lab, W, H, pal, s, comp, order);
   // Penyederhanaan menurut kekuatan tepi: bercak (bayangan lembut, gradasi
   // berpita) yang batasnya dengan tetangga lemah di gambar asli dan warnanya
   // mirip dilebur ke tetangga terbesar. Batas kontras (outline) tidak disentuh.
@@ -763,6 +764,26 @@ function buildPalette(px, w, h, o) {
   // lembah: pita tepi yang buram tidak masuk, gradasi lebar yang landai masuk.
   const strict = o.mode === 'color' && o.clean !== false ? new Float64Array(32768) : null;
   let flat = 0, all = 0;
+  // Latar kunci: piksel <= 5 px dari area transparan. Rembesan warna kunci hanya
+  // ada di sana, jadi warna di tengah objek tidak boleh dianggap rembesan.
+  let nearT = null;
+  const nearCnt = o.bgKey === 'magenta' ? new Float64Array(32768) : null;
+  if (nearCnt) {
+    nearT = new Uint8Array(w * h);
+    let fr = [];
+    for (let i = 0; i < w * h; i++) if (px[i * 4 + 3] < 128) { nearT[i] = 1; fr.push(i); }
+    for (let step = 0; step < 5 && fr.length; step++) {
+      const nx = [];
+      for (const i of fr) {
+        const x = i % w;
+        if (x > 0 && !nearT[i - 1]) { nearT[i - 1] = 1; nx.push(i - 1); }
+        if (x < w - 1 && !nearT[i + 1]) { nearT[i + 1] = 1; nx.push(i + 1); }
+        if (i >= w && !nearT[i - w]) { nearT[i - w] = 1; nx.push(i - w); }
+        if (i < w * h - w && !nearT[i + w]) { nearT[i + w] = 1; nx.push(i + w); }
+      }
+      fr = nx;
+    }
+  }
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -778,6 +799,7 @@ function buildPalette(px, w, h, o) {
       }
       const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
       acnt[key]++; ar[key] += r; ag[key] += g; ab[key] += b; all++;
+      if (nearT && nearT[i]) nearCnt[key]++;
 
       let isFlat = true;
       if (x > 0) isFlat = isFlat && diff(px, p, p - 4) <= FT;
@@ -922,8 +944,21 @@ function buildPalette(px, w, h, o) {
   // adalah rembesan kunci (mis. navy keunguan di tepi garis) → lebur ke warna aslinya.
   if (o.bgKey === 'magenta') {
     const K = [255, 0, 255];
+    // Bagian piksel warna ini (bin sekitarnya) yang berada di dekat area transparan.
+    const nearFrac = (c) => {
+      const r0 = clamp255(c.r) >> 3, g0 = clamp255(c.g) >> 3, b0 = clamp255(c.b) >> 3;
+      let nr = 0, tot = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dg = -1; dg <= 1; dg++) for (let db = -1; db <= 1; db++) {
+        const r = r0 + dr, g = g0 + dg, b = b0 + db;
+        if (r < 0 || g < 0 || b < 0 || r > 31 || g > 31 || b > 31) continue;
+        const key = (r << 10) | (g << 5) | b;
+        nr += nearCnt[key]; tot += acnt[key];
+      }
+      return tot ? nr / tot : 0;
+    };
     for (let k = P.length - 1; k >= 0 && P.length > 1; k--) {
       const c = P[k];
+      if (nearFrac(c) < 0.5) continue; // bukan di tepi latar → bukan rembesan
       let bi = -1, br = 20; // selisih RGB maksimum dari garis campuran
       for (let i = 0; i < P.length; i++) {
         if (i === k) continue;
@@ -1687,6 +1722,59 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
   for (let i = 0; i < N; i++) if (lab[i] < HW) lab[i] = col[find(comp[i])];
 }
 
+// Serpihan tipis (lebar rata-rata < wMax px sumber) yang terjepit di antara dua
+// bentuk lain dan warnanya mirip salah satunya (dE <= maxDE): halo terang/gelap
+// akibat kompresi JPEG di sepanjang tepi kontras, atau sisa antialias. Dilebur
+// ke tetangga yang paling mirip. Garis tipis yang kontras terhadap kedua sisinya
+// (outline) dan bentuk tipis di dalam satu bentuk saja (kilau) tidak disentuh.
+function dropThin(lab, W, H, pal, s, comp, order, wMax = 2, maxDE = 18) {
+  const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
+  const N = W * H;
+  for (let pass = 0; pass < 2; pass++) {
+    const info = label(lab, W, H, comp, order);
+    const n = info.count;
+    const per = new Float64Array(n);
+    for (let i = 0; i < N; i++) {
+      const c = comp[i], x = i % W;
+      if (x < W - 1 && comp[i + 1] !== c) { per[c]++; per[comp[i + 1]]++; }
+      if (i < N - W && comp[i + W] !== c) { per[c]++; per[comp[i + W]]++; }
+    }
+    const votes = new Map();
+    let changed = 0;
+    for (let c = 0; c < n; c++) {
+      const own = info.lbl[c];
+      if (own >= HW || !per[c]) continue;
+      const wid = (2 * info.size[c]) / per[c] / s;
+      if (wid >= wMax) continue;
+      votes.clear();
+      let total = 0;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) {
+        const i = order[h], x = i % W;
+        const see = (q) => { const k = comp[q]; if (k !== c) { votes.set(k, (votes.get(k) || 0) + 1); total++; } };
+        if (x > 0) see(i - 1);
+        if (x < W - 1) see(i + 1);
+        if (i >= W) see(i - W);
+        if (i < N - W) see(i + W);
+      }
+      // Harus terjepit: minimal dua tetangga yang masing-masing >= 20 % batasnya.
+      const big = [...votes].filter((v) => v[1] >= 0.2 * total);
+      if (big.length < 2) continue;
+      let best = -1, bd = Infinity;
+      for (const [k] of big) {
+        const l = info.lbl[k];
+        if (l >= HW) continue;
+        const d = dE(own, l);
+        if (d < bd) { bd = d; best = l; }
+      }
+      // Serpihan setipis rambut (< 1,6 px): halo JPEG bisa cukup berbeda dari induknya.
+      if (best < 0 || bd > (wid < 1.6 ? maxDE * 1.5 : maxDE)) continue;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = best;
+      changed++;
+    }
+    if (!changed) break;
+  }
+}
+
 // Gradien: pita sangat tipis (lebar rata-rata < ~1,3 px sumber) yang warnanya
 // campuran dua tetangganya (peralihan antialias di sisi garis) dilebur ke
 // tetangga yang paling mirip — tiap garis gambar cukup satu kontur.
@@ -2250,16 +2338,27 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
   // Penyederhanaan adaptif (Rapikan): batas yang lemah dukungan pikselnya (dua
   // warna mirip) dihaluskan lebih kuat → lebih sedikit titik, tanpa gelombang.
   const pal = o._pal, adaptive = o.mode === 'color' && o.clean !== false && pal;
+  const legacyWeak = o.softFit === false;
   const ws = o.straighten === true;
   const fitWeak = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 2.2, weakStraight: ws }) : null;
   const fitMid = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.5, weakStraight: ws }) : null;
   const fitSoft = adaptive && ws ? makeFitter(W1, s, { ...o, weakStraight: true }) : null;
+  // Batas lembut (peralihan warna melebar di gambar, mis. tepi bayangan) atau
+  // antar dua warna yang sangat mirip: letak tepinya tidak pasti, jadi geometri
+  // rantainya dihaluskan kuat lalu di-fit biasa → kurva mulus dengan sedikit
+  // titik; garis yang memang lurus tetap lurus, lengkung tetap lengkung.
+  const fitGentle = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.4, rough: Math.max(o.rough || 0, 3.5) }) : null;
+  const fitHalf = adaptive ? makeFitter(W1, s, { ...o, smooth: o.smooth * 1.2, rough: Math.max(o.rough || 0, 2.5) }) : null;
   const pickFit = (ch) => {
     if (!adaptive || ch.b < 0) return fitter;
     const la = info.lbl[ch.a], lb = info.lbl[ch.b];
     if (la >= HW || lb >= HW) return fitter;
     const p = pal[la], q = pal[lb], d = Math.hypot(p.L - q.L, p.A - q.A, p.B - q.B);
-    return d < 10 ? fitWeak : d < 18 ? fitMid : d < 30 && fitSoft ? fitSoft : fitter;
+    if (legacyWeak) return d < 10 ? fitWeak : d < 18 ? fitMid : d < 30 && fitSoft ? fitSoft : fitter;
+    const soft = softness(ch);
+    if (soft > 0.6 || d < 8) return fitGentle;
+    if (soft > 0.3 || d < 14) return fitHalf;
+    return fitter;
   };
   // Tepi sub-piksel: tiap titik batas digeser (tegak lurus batas) ke tempat
   // warna gambar tepat di tengah kedua warna region (titik 50 % antialias), atau
@@ -2350,6 +2449,35 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
       }
     };
   };
+  // Kelembutan batas: bagian titik rantai yang peralihan warnanya, diukur pada
+  // gambar ±1,5 px sumber tegak lurus batas, kurang dari separuh selisih kedua
+  // warna region (gradasi melebar, bukan tepi tegas).
+  const SP = o._pal;
+  function softness(ch) {
+    if (!SP || !data || ch.b < 0) return 0;
+    const la = info.lbl[ch.a], lb = info.lbl[ch.b];
+    if (la >= SP.length || lb >= SP.length) return 0;
+    const A = SP[la], B = SP[lb];
+    const vx = B.r - A.r, vy = B.g - A.g, vz = B.b - A.b, vv = vx * vx + vy * vy + vz * vz;
+    if (vv < 1) return 1;
+    const V = ch.raw.open || ch.raw.closed, n = V.length, closedPath = !ch.raw.open;
+    if (n < 6) return 0;
+    const fz = (x, y) => { samp(x, y, SC); return ((SC[0] - A.r) * vx + (SC[1] - A.g) * vy + (SC[2] - A.b) * vz) / vv; };
+    const Rs = 1.5 * s, kk = Math.max(3, Math.round(1.5 * s)), stepI = Math.max(1, Math.round(s));
+    let soft = 0, cnt = 0;
+    for (let i = closedPath ? 0 : kk; i < (closedPath ? n : n - kk); i += stepI) {
+      const a = V[closedPath ? (i - kk + n * 4) % n : i - kk], b = V[closedPath ? (i + kk) % n : i + kk], c = V[i];
+      let tx = (b % W1) - (a % W1), ty = ((b / W1) | 0) - ((a / W1) | 0);
+      const tl = Math.hypot(tx, ty);
+      if (tl < 1e-6) continue;
+      tx /= tl; ty /= tl;
+      const x = c % W1, y = (c / W1) | 0;
+      const d = Math.abs(fz(x - ty * Rs, y + tx * Rs) - fz(x + ty * Rs, y - tx * Rs));
+      cnt++;
+      if (d < 0.5) soft++;
+    }
+    return cnt ? soft / cnt : 0;
+  }
   chains.forEach((ch, i) => {
     const seq = ch.raw.open;
     const f = pickFit(ch);
@@ -2414,7 +2542,7 @@ function makeFitter(W1, s, o) {
   // (<= o.rough px sumber) dihaluskan; hanya sudut yang tetap tajam pada skala
   // yang lebih besar daripada gelombang itu yang dipertahankan.
   const roughSig = Math.max(0, o.rough || 0) * s;
-  const roughPasses = roughSig > 0 ? Math.min(400, Math.round(2 * roughSig * roughSig)) : 0;
+  const roughPasses = roughSig > 0 ? Math.min(600, Math.round(2 * roughSig * roughSig)) : 0;
   const roughWin = Math.max(1, Math.round(3 * roughSig));
 
   const vx = (v) => v % W1, vy = (v) => (v / W1) | 0;
@@ -2526,7 +2654,11 @@ function makeFitter(W1, s, o) {
     const fixed = new Uint8Array(n);
     if (!closedPath) fixed[0] = fixed[n - 1] = 1;
     let Q = smooth(P, n, closedPath, fixed, 1);
-    if (roughPasses && n > 8) Q = smooth(Q, n, closedPath, fixed, Math.min(roughPasses, n * 2));
+    if (roughPasses && n > 8) {
+      // sigma <= n/20 (tertutup) atau n/8 (terbuka) sampel: bentuk kecil tidak menyusut.
+      const cap = closedPath ? 2 * (n / 20) ** 2 : 2 * (n / 8) ** 2;
+      Q = smooth(Q, n, closedPath, fixed, Math.max(2, Math.min(roughPasses, Math.round(cap))));
+    }
     let R, m;
     if (closedPath) {
       // Mulai di titik dengan belokan terbesar (calon sudut).
