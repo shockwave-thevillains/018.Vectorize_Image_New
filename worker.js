@@ -770,6 +770,7 @@ function buildPalette(px, w, h, o) {
   // lembah: pita tepi yang buram tidak masuk, gradasi lebar yang landai masuk.
   const strict = o.mode === 'color' && o.clean !== false ? new Float64Array(32768) : null;
   let flat = 0, all = 0;
+  const samples = [];
   // Latar kunci: piksel <= 5 px dari area transparan. Rembesan warna kunci hanya
   // ada di sana, jadi warna di tengah objek tidak boleh dianggap rembesan.
   let nearT = null;
@@ -816,7 +817,10 @@ function buildPalette(px, w, h, o) {
       if (strict) {
         const ST = 12;
         if ((x === 0 || diff(px, p, p - 4) <= ST) && (x === w - 1 || diff(px, p, p + 4) <= ST)
-          && (y === 0 || diff(px, p, p - w * 4) <= ST) && (y === h - 1 || diff(px, p, p + w * 4) <= ST)) strict[key]++;
+          && (y === 0 || diff(px, p, p - w * 4) <= ST) && (y === h - 1 || diff(px, p, p + w * 4) <= ST)) {
+          strict[key]++;
+          if (((x * 7 + y * 13) & 3) === 0) samples.push(r, g, b); // ¼ piksel rata, untuk uji lembah halus
+        }
       }
     }
   }
@@ -863,7 +867,33 @@ function buildPalette(px, w, h, o) {
   };
   // Histogram "sangat rata" untuk bidang lebar; histogram rata biasa untuk
   // bidang tipis (outline) yang hampir tidak punya piksel sangat rata.
-  const valley = (p, q) => (strict && valleyIn(strict, p, q)) || valleyIn(C, p, q);
+  // Uji lembah halus untuk dua warna yang dekat: piksel rata di dekat ruas p–q
+  // (jarak RGB <= 40 % panjang ruas, min. 6) diproyeksikan ke ruas itu dalam
+  // 12 bagian. Dua bidang datar → dua puncak dengan lembah di antaranya;
+  // gradasi/derau → sebaran rata tanpa lembah.
+  const valleyFine = (p, q) => {
+    if (!samples.length) return false;
+    const vx = q.r - p.r, vy = q.g - p.g, vz = q.b - p.b, vv = vx * vx + vy * vy + vz * vz;
+    if (vv < 9) return false;
+    const L = Math.sqrt(vv), rad = Math.max(6, 0.4 * L), BN = 12;
+    const hist = new Float64Array(BN);
+    for (let k = 0; k < samples.length; k += 3) {
+      const dx = samples[k] - p.r, dy = samples[k + 1] - p.g, dz = samples[k + 2] - p.b;
+      const t = (dx * vx + dy * vy + dz * vz) / vv;
+      if (t < -0.15 || t > 1.15) continue;
+      const ex = dx - t * vx, ey = dy - t * vy, ez = dz - t * vz;
+      if (ex * ex + ey * ey + ez * ez > rad * rad) continue;
+      hist[Math.max(0, Math.min(BN - 1, Math.floor(t * BN)))]++;
+    }
+    let a = 0, b = 0;
+    for (let i = 0; i < 3; i++) { a = Math.max(a, hist[i]); b = Math.max(b, hist[BN - 1 - i]); }
+    const peak = Math.min(a, b);
+    if (peak < Math.max(30, samples.length / 3 * 0.0005)) return false;
+    let low = Infinity;
+    for (let i = 4; i < BN - 4; i++) low = Math.min(low, hist[i]);
+    return low < 0.2 * peak;
+  };
+  const valley = (p, q) => (strict && valleyIn(strict, p, q)) || valleyIn(C, p, q) || (strict && valleyFine(p, q));
   let cl = [];
   for (const k of bins) {
     const L = bl[k * 3], A = bl[k * 3 + 1], Bb = bl[k * 3 + 2];
