@@ -209,6 +209,8 @@ async function vectorize(file, o, progress, aiMask) {
   // Batas yang di gambar asli hanyalah gradasi (tanpa garis tegas) tidak dibuat
   // menjadi garis: bercak di dalam gradasi dilebur ke tetangganya.
   if (clean && o.softMerge !== false) mergeSoft(lab, data, W, H, pal, s, comp, order, o.softMergeArea ?? 0.006, o.softMergeDE ?? 16, o.softMergeFrac ?? 0.8);
+  // Warna antara yang bedanya sangat tipis dengan tetangganya dianggap sama.
+  if (clean && (o.stepDE ?? 8) > 0) mergeSteps(lab, W, H, pal, comp, order, o.stepDE ?? 8);
   // Penyederhanaan menurut kekuatan tepi: bercak (bayangan lembut, gradasi
   // berpita) yang batasnya dengan tetangga lemah di gambar asli dan warnanya
   // mirip dilebur ke tetangga terbesar. Batas kontras (outline) tidak disentuh.
@@ -1756,6 +1758,63 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
   }
   if (!merged) return;
   for (let i = 0; i < N; i++) if (lab[i] < HW) lab[i] = col[find(comp[i])];
+}
+
+// Warna antara: bentuk yang warnanya terletak di antara warna dua tetangganya
+// (dE(A,C) + dE(C,B) <= 1,15 x dE(A,B)) dan hanya beda tipis (<= maxDE) dari
+// salah satunya adalah tingkat peralihan (pita gradasi, sisa antialias), bukan
+// unsur gambar → dilebur utuh ke tetangga yang paling mirip. Detail yang lebih
+// gelap/terang dari sekitarnya (bayangan, kilau, butir) tidak berada "di antara"
+// sehingga tetap ada.
+function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
+  const N = W * H;
+  const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
+  for (let pass = 0; pass < 2; pass++) {
+    const info = label(lab, W, H, comp, order);
+    const n = info.count;
+    const adj = new Map();
+    const add = (a, b) => { let m = adj.get(a); if (!m) adj.set(a, (m = new Map())); m.set(b, (m.get(b) || 0) + 1); };
+    for (let i = 0; i < N; i++) {
+      const c = comp[i], x = i % W;
+      if (x < W - 1 && comp[i + 1] !== c) { add(c, comp[i + 1]); add(comp[i + 1], c); }
+      if (i < N - W && comp[i + W] !== c) { add(c, comp[i + W]); add(comp[i + W], c); }
+    }
+    const target = new Int32Array(n).fill(-1);
+    let changed = 0;
+    for (let c = 0; c < n; c++) {
+      const C = info.lbl[c];
+      const m = adj.get(c);
+      if (C >= HW || !m) continue;
+      // Panjang batas dan bentuk terbesar per warna tetangga. Bentuk perantara
+      // harus lebih kecil dari tetangga di kedua sisinya (pita, bukan bidang utama).
+      const per = new Map(), big = new Map();
+      let total = 0;
+      for (const [q, k] of m) {
+        total += k;
+        const l = info.lbl[q];
+        per.set(l, (per.get(l) || 0) + k);
+        big.set(l, Math.max(big.get(l) || 0, info.size[q]));
+      }
+      const own = info.size[c];
+      const cols = [...per].filter(([l, k]) => l < HW && l !== C && k >= 0.15 * total && big.get(l) > own).map(([l]) => l);
+      let best = -1, bd = Infinity;
+      for (let u = 0; u < cols.length; u++) {
+        for (let v = u + 1; v < cols.length; v++) {
+          const A = cols[u], B = cols[v];
+          const ac = dE(A, C), cb = dE(C, B), ab = dE(A, B);
+          if (ac + cb > 1.15 * ab) continue;
+          const near = ac <= cb ? A : B, d = Math.min(ac, cb);
+          if (d <= maxDE && d < bd) { bd = d; best = near; }
+        }
+      }
+      if (best >= 0) { target[c] = best; changed++; }
+    }
+    if (!changed) break;
+    for (let c = 0; c < n; c++) {
+      if (target[c] < 0) continue;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = target[c];
+    }
+  }
 }
 
 // Lebur bercak berbatas gradasi: untuk tiap pasangan bentuk bersebelahan diukur
