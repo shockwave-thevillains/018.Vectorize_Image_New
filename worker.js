@@ -203,6 +203,12 @@ async function vectorize(file, o, progress, aiMask) {
   // ujung goresan, pinggiran garis) dilebur ke tetangga yang paling mirip.
   if (clean) dropSlivers(lab, W, H, pal, s, comp, order, 2.2, 0.2, 6);
   if (clean && o.thinDrop !== false) dropThin(lab, W, H, pal, s, comp, order);
+  // Cocokkan tiap bentuk dengan gambar asli: bentuk yang warnanya tidak sesuai
+  // rata-rata piksel aslinya (bagian yang tidak ada di gambar awal) dilebur.
+  if (clean && o.verify !== false) verifyRegions(lab, data, W, H, pal, s, comp, order);
+  // Batas yang di gambar asli hanyalah gradasi (tanpa garis tegas) tidak dibuat
+  // menjadi garis: bercak di dalam gradasi dilebur ke tetangganya.
+  if (clean && o.softMerge !== false) mergeSoft(lab, data, W, H, pal, s, comp, order, o.softMergeArea ?? 0.006, o.softMergeDE ?? 16, o.softMergeFrac ?? 0.8);
   // Penyederhanaan menurut kekuatan tepi: bercak (bayangan lembut, gradasi
   // berpita) yang batasnya dengan tetangga lemah di gambar asli dan warnanya
   // mirip dilebur ke tetangga terbesar. Batas kontras (outline) tidak disentuh.
@@ -1720,6 +1726,123 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
   }
   if (!merged) return;
   for (let i = 0; i < N; i++) if (lab[i] < HW) lab[i] = col[find(comp[i])];
+}
+
+// Lebur bercak berbatas gradasi: untuk tiap pasangan bentuk bersebelahan diukur
+// seberapa tajam peralihan warnanya di gambar asli (selisih warna ±1,5 px sumber
+// dari batas, diproyeksikan ke selisih kedua warna palet). Batas tegas (outline,
+// butir, kilau) berubah penuh dalam jarak itu; batas pita gradasi hanya sedikit.
+// Pasangan yang sebagian besar batasnya gradasi dan warnanya mirip digabung
+// (bentuk lebih kecil ke yang lebih besar, dibatasi luas).
+function mergeSoft(lab, data, W, H, pal, s, comp, order, areaFrac, maxDE, minFrac) {
+  const N = W * H;
+  const info = label(lab, W, H, comp, order);
+  const n = info.count;
+  const R = Math.max(2, Math.round(1.5 * s));
+  const pairs = new Map();
+  const step = Math.max(1, Math.round(s / 2));
+  const at = (x, y) => (Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))) * 4;
+  const look = (a, b, p1, p2) => {
+    const la = info.lbl[a], lb = info.lbl[b];
+    if (la >= HW || lb >= HW) return;
+    const A = pal[la], B = pal[lb];
+    const vx = B.r - A.r, vy = B.g - A.g, vz = B.b - A.b, vv = vx * vx + vy * vy + vz * vz;
+    if (vv < 1) return;
+    const f1 = ((data[p1] - A.r) * vx + (data[p1 + 1] - A.g) * vy + (data[p1 + 2] - A.b) * vz) / vv;
+    const f2 = ((data[p2] - A.r) * vx + (data[p2 + 1] - A.g) * vy + (data[p2 + 2] - A.b) * vz) / vv;
+    const key = a < b ? a * n + b : b * n + a;
+    let v = pairs.get(key);
+    if (!v) pairs.set(key, (v = [0, 0]));
+    v[0]++;
+    if (Math.abs(f2 - f1) < 0.5) v[1]++;
+  };
+  for (let y = 0; y < H; y += step) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, c = comp[i];
+      if (x < W - 1 && comp[i + 1] !== c) look(c, comp[i + 1], at(x - R, y), at(x + 1 + R, y));
+    }
+  }
+  for (let y = 0; y < H - 1; y++) {
+    for (let x = 0; x < W; x += step) {
+      const i = y * W + x, c = comp[i];
+      if (comp[i + W] !== c) look(c, comp[i + W], at(x, y - R), at(x, y + 1 + R));
+    }
+  }
+  const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
+  const list = [];
+  for (const [key, v] of pairs) {
+    if (v[0] < 4) continue;
+    const fr = v[1] / v[0];
+    if (fr >= minFrac) list.push([fr, Math.floor(key / n), key % n]);
+  }
+  list.sort((p, q) => q[0] - p[0]);
+  const par = Int32Array.from({ length: n }, (_, i) => i);
+  const area = Float64Array.from(info.size);
+  const col = Uint8Array.from(info.lbl);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  const cap = areaFrac * N;
+  let merged = 0;
+  for (const [, a0, b0] of list) {
+    const a = find(a0), b = find(b0);
+    if (a === b || col[a] >= HW || col[b] >= HW || dE(col[a], col[b]) > maxDE) continue;
+    const big = area[a] >= area[b] ? a : b, small = big === a ? b : a;
+    if (area[small] > cap) continue;
+    par[small] = big; area[big] += area[small];
+    merged++;
+  }
+  if (!merged) return;
+  for (let i = 0; i < N; i++) if (lab[i] < HW) lab[i] = col[find(comp[i])];
+}
+
+// Verifikasi terhadap gambar asli: untuk tiap bentuk dihitung rata-rata warna
+// piksel aslinya. Bila warna palet bentuk itu jauh darinya (dE > maxOwn) dan ada
+// tetangga yang warnanya lebih cocok, bentuk itu sebenarnya bukan bagian gambar
+// (campuran tepi, halo, salah tebak) → dilebur ke tetangga yang paling cocok.
+// Bentuk besar hanya diperiksa bila selisihnya sangat jauh.
+function verifyRegions(lab, data, W, H, pal, s, comp, order, maxOwn = 12) {
+  const N = W * H;
+  const L3 = new Float32Array(3);
+  for (let pass = 0; pass < 2; pass++) {
+    const info = label(lab, W, H, comp, order);
+    const n = info.count;
+    const mr = new Float64Array(n), mg = new Float64Array(n), mb = new Float64Array(n);
+    for (let i = 0, p = 0; i < N; i++, p += 4) { const c = comp[i]; mr[c] += data[p]; mg[c] += data[p + 1]; mb[c] += data[p + 2]; }
+    const adj = new Map();
+    const add = (a, b) => { let m = adj.get(a); if (!m) adj.set(a, (m = new Map())); m.set(b, (m.get(b) || 0) + 1); };
+    for (let i = 0; i < N; i++) {
+      const c = comp[i], x = i % W;
+      if (x < W - 1 && comp[i + 1] !== c) { add(c, comp[i + 1]); add(comp[i + 1], c); }
+      if (i < N - W && comp[i + W] !== c) { add(c, comp[i + W]); add(comp[i + W], c); }
+    }
+    const big = 0.02 * N;
+    let changed = 0;
+    const target = new Int32Array(n).fill(-1);
+    for (let c = 0; c < n; c++) {
+      const own = info.lbl[c];
+      if (own >= HW) continue;
+      const k = info.size[c];
+      rgb2lab(clamp255(mr[c] / k), clamp255(mg[c] / k), clamp255(mb[c] / k), L3);
+      const d = (l) => Math.hypot(pal[l].L - L3[0], pal[l].A - L3[1], pal[l].B - L3[2]);
+      const dOwn = d(own);
+      if (dOwn <= (k > big ? maxOwn * 2 : maxOwn)) continue;
+      const m = adj.get(c);
+      if (!m) continue;
+      let best = -1, bd = dOwn * 0.7;
+      for (const [q] of m) {
+        const l = info.lbl[q];
+        if (l >= HW || l === own) continue;
+        const dq = d(l);
+        if (dq < bd) { bd = dq; best = l; }
+      }
+      if (best >= 0) target[c] = best;
+    }
+    for (let c = 0; c < n; c++) {
+      if (target[c] < 0) continue;
+      for (let h = info.start[c], e = h + info.size[c]; h < e; h++) lab[order[h]] = target[c];
+      changed++;
+    }
+    if (!changed) break;
+  }
 }
 
 // Serpihan tipis (lebar rata-rata < wMax px sumber) yang terjepit di antara dua
