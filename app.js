@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150536';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150540';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -16,11 +16,11 @@ const DEFAULTS = {
   upscale: 4,
   colorAuto: 1,
   maxColors: 12,
-  colorMerge: 10,
+  colorMerge: 17,
   smooth: 0.8,
   minArea: 6,
   corner: 70,
-  bgKey: 'white',
+  bgKey: 'magenta',
   keyTol: 30,
   whiteMode: 'outer',
   whiteTol: 10,
@@ -33,6 +33,16 @@ const DEFAULTS = {
   start: 1,
   format: 'both',
 };
+// Bawaan yang berbeda per mode: DEFAULTS memakai nilai mode Warna (mode bawaan);
+// mode Siluet & Gradien memakai latar putih dan kepekaan warna 10.
+const MODE_DEFAULTS = { color: { bgKey: 'magenta', colorMerge: 17 } };
+const OTHER_DEFAULTS = { bgKey: 'white', colorMerge: 10 };
+const modeDefault = (mode, k) => (MODE_DEFAULTS[mode] && k in MODE_DEFAULTS[mode] ? MODE_DEFAULTS[mode][k] : OTHER_DEFAULTS[k]);
+// Ganti mode: pengaturan yang masih bernilai bawaan mode lama ikut ke bawaan mode
+// baru; yang sudah diubah pengguna dibiarkan.
+function applyModeDefaults(prev, next) {
+  for (const k of Object.keys(OTHER_DEFAULTS)) if (S[k] === modeDefault(prev, k)) S[k] = modeDefault(next, k);
+}
 const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
@@ -41,7 +51,19 @@ const S = { ...DEFAULTS, ...loadSettings() };
 function loadSettings() {
   try {
     const v4 = localStorage.getItem('vektor.settings.v4');
-    if (v4) return JSON.parse(v4);
+    if (v4) {
+      const st = JSON.parse(v4);
+      // Sekali: bawaan lama mode Warna (latar putih, kepekaan 10) → bawaan baru.
+      if (localStorage.getItem('vektor.defaults.rev') !== '2') {
+        localStorage.setItem('vektor.defaults.rev', '2');
+        if ((st.mode || 'color') === 'color') {
+          if (st.bgKey === 'white') st.bgKey = 'magenta';
+          if (st.colorMerge === 10) st.colorMerge = 17;
+        }
+        localStorage.setItem('vektor.settings.v4', JSON.stringify(st));
+      }
+      return st;
+    }
     // Pindah dari v3: pertahankan pengaturan lain, tapi latar putih kembali ke bawaan baru.
     const old = JSON.parse(localStorage.getItem('vektor.settings.v3') || '{}');
     delete old.whiteMode; delete old.cavity;
@@ -178,7 +200,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611150536');
+  const w = new Worker('worker.js?v=202611150540');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -198,7 +220,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611150536', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611150540', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -1115,7 +1137,9 @@ function bindSettings() {
       const b = e.target.closest('button');
       if (!b) return;
       const raw = b.dataset.v;
-      S[opt] = typeof DEFAULTS[opt] === 'number' ? Number(raw) : raw;
+      const v = typeof DEFAULTS[opt] === 'number' ? Number(raw) : raw;
+      if (opt === 'mode' && v !== S.mode) applyModeDefaults(S.mode, v);
+      S[opt] = v;
       changed(opt);
     });
   });
