@@ -86,7 +86,7 @@ async function vectorize(file, o, progress, aiMask) {
   // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
   // Gradien: garis tipis dideteksi dulu, dihapus dari gambar (diisi warna
   // latarnya), lalu digambar ulang sebagai garis vektor bertebal seragam.
-  let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh, ...(o._dl || [])) : [];
+  let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh, 2.5, 3.6, true) : [];
   let flatEdge = null;
   if (thinLines.length) g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   if (o.mode === 'gradient') {
@@ -396,11 +396,334 @@ async function vectorize(file, o, progress, aiMask) {
 }
 
 // ---------------------------------------------------------------- garis tipis
+// Gradien: sambungan garis yang rapi. Tiap ujung garis dikenali (arah dari
+// beberapa titik terakhir), lalu:
+// 1. Ujung yang menembus garis lain dipotong tepat di sumbu garis itu.
+// 2. Arah garis diteruskan (forecast) maks. ~3× tebalnya: bila sinar itu
+//    memotong garis lain → disambung tepat di titik potong (sambungan-T);
+//    bila bertemu ujung garis lain yang menghadap ke sini → disambung ke ujung
+//    itu (garis yang putus). Sambungan hanya dibuat bila piksel aslinya di
+//    sepanjang jembatan memang segelap/seterang garis (tidak mengarang garis).
+// 3. Ujung yang tidak tersambung diteruskan selama piksel aslinya masih
+//    segelap garis (ujung meruncing), berhenti sebelum menyentuh garis lain.
+function joinLineEnds(cand, w, h, samp, Y) {
+  const C = [0, 0, 0], A = [0, 0, 0], B = [0, 0, 0];
+  // Garis tidak berbalik arah: rantai yang menikung tajam (> ~105°, mis. saat
+  // penelusuran masuk ke garis lain di persimpangan) dipecah di tikungan itu;
+  // potongan pendek (taji) dibuang, pikselnya tetap dihapus dari isian.
+  {
+    const outL = [];
+    for (const L of cand) {
+      const P = L.pts, n = P.length, cuts = [];
+      const at = (k, sgn) => { let j = k; while (j + sgn >= 0 && j + sgn < n && Math.hypot(P[j + sgn][0] - P[k][0], P[j + sgn][1] - P[k][1]) <= 3) j += sgn; return P[j]; };
+      for (let k = 2; k < n - 2; k++) {
+        const a = at(k, -1), b = at(k, 1), c = P[k];
+        const ux = c[0] - a[0], uy = c[1] - a[1], vx = b[0] - c[0], vy = b[1] - c[1];
+        const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+        if (lu < 1.5 || lv < 1.5) continue;
+        if ((ux * vx + uy * vy) / (lu * lv) < -0.25 && (!cuts.length || k - cuts[cuts.length - 1] > 3)) cuts.push(k);
+      }
+      if (!cuts.length) { outL.push(L); continue; }
+      const pieces = [];
+      let st = 0;
+      for (const k of [...cuts, n - 1]) { pieces.push([st, k]); st = k; }
+      const minLen = Math.max(4, 2 * L.w);
+      let main = null;
+      const keepP = [];
+      for (const [a, b] of pieces) {
+        let len = 0;
+        for (let k = a + 1; k <= b; k++) len += Math.hypot(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1]);
+        const piece = { ...L, pts: P.slice(a, b + 1), idx: L.idx ? L.idx.slice(a, b + 1) : [] };
+        if (len >= minLen) { keepP.push(piece); if (!main || piece.pts.length > main.pts.length) main = piece; }
+        else piece.spur = true, keepP.push(piece);
+      }
+      for (const pc of keepP) {
+        if (!pc.spur) outL.push(pc);
+        else if (main) main.idx = main.idx.concat(pc.idx);
+      }
+    }
+    cand.length = 0;
+    cand.push(...outL);
+  }
+  const cell = 6;
+  let grid, snap;
+  const build = () => {
+    grid = new Map();
+    snap = cand.map((L) => L.pts);
+    cand.forEach((L, li) => {
+      for (let k = 0; k + 1 < L.pts.length; k++) {
+        const [x0, y0] = L.pts[k], [x1, y1] = L.pts[k + 1];
+        const gx0 = Math.floor(Math.min(x0, x1) / cell), gx1 = Math.floor(Math.max(x0, x1) / cell);
+        const gy0 = Math.floor(Math.min(y0, y1) / cell), gy1 = Math.floor(Math.max(y0, y1) / cell);
+        for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+          const q = (gy + 1) * 65536 + gx + 1;
+          let a = grid.get(q); if (!a) grid.set(q, (a = [])); a.push(li, k);
+        }
+      }
+    });
+  };
+  const segsNear = (x, y, r) => {
+    const out = [], seen = new Set();
+    for (let gy = Math.floor((y - r) / cell); gy <= Math.floor((y + r) / cell); gy++)
+      for (let gx = Math.floor((x - r) / cell); gx <= Math.floor((x + r) / cell); gx++) {
+        const a = grid.get((gy + 1) * 65536 + gx + 1);
+        if (!a) continue;
+        for (let k = 0; k < a.length; k += 2) { const key = a[k] * 1e6 + a[k + 1]; if (!seen.has(key)) { seen.add(key); out.push(a[k], a[k + 1]); } }
+      }
+    return out;
+  };
+  // Segmen milik garis sendiri di dekat ujung ini tidak dihitung.
+  const distSeg = (px, py, a, b) => {
+    const vx = b[0] - a[0], vy = b[1] - a[1], vv = vx * vx + vy * vy;
+    let t = vv ? ((px - a[0]) * vx + (py - a[1]) * vy) / vv : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - a[0] - t * vx, py - a[1] - t * vy);
+  };
+  // Perpotongan sinar (o + t·d, 0 < t <= tmax) dengan segmen ab.
+  const raySeg = (ox, oy, dx, dy, a, b, tmax) => {
+    const ex = b[0] - a[0], ey = b[1] - a[1], den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((a[0] - ox) * ey - (a[1] - oy) * ex) / den, u = ((a[0] - ox) * dy - (a[1] - oy) * dx) / den;
+    if (t <= 0 || t > tmax || u < -0.02 || u > 1.02) return null;
+    return t;
+  };
+  const endDir = (L, end) => {
+    const P = L.pts, n = P.length, a = end ? P[n - 1] : P[0];
+    let b = a;
+    for (let k = 1; k < Math.min(n, 8); k++) { b = end ? P[n - 1 - k] : P[k]; if (Math.hypot(a[0] - b[0], a[1] - b[1]) >= 4) break; }
+    const dx = a[0] - b[0], dy = a[1] - b[1], l = Math.hypot(dx, dy);
+    return l < 1e-6 ? null : [dx / l, dy / l];
+  };
+  // Jembatan a→b sah bila piksel aslinya gelap (garis gelap) / terang.
+  const bridgeOk = (L, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy);
+    if (l < 0.75) return true;
+    const nx = -dy / l, ny = dx / l, sw = L.w / 2 + 2;
+    let good = 0, n = 0;
+    for (let d = 0.5; d < l; d += 0.5) {
+      const x = a[0] + (dx * d) / l, y = a[1] + (dy * d) / l;
+      samp(x, y, C); samp(x + nx * sw, y + ny * sw, A); samp(x - nx * sw, y - ny * sw, B);
+      const yc = Y(C);
+      n++;
+      if (L.dark ? yc < Math.max(Y(A), Y(B)) - 15 : yc > Math.min(Y(A), Y(B)) + 15) good++;
+    }
+    return !n || good >= 0.7 * n;
+  };
+  const setEnd = (L, end, pts) => { L.pts = end ? L.pts.concat(pts) : pts.slice().reverse().concat(L.pts); };
+  const bridgePts = (a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy), o = [];
+    for (let d = 1; d < l; d += 1) o.push([a[0] + (dx * d) / l, a[1] + (dy * d) / l]);
+    o.push([b[0], b[1]]);
+    return o;
+  };
+  const extOf = (a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy), o = [];
+    if (l < 1e-6) return o;
+    for (let d = 0.5; d <= l; d += 0.5) o.push([a[0] + (dx * d) / l, a[1] + (dy * d) / l, -dy / l, dx / l]);
+    return o;
+  };
+  cand.forEach((L) => { L.ext = []; L.joined = [false, false]; });
+
+  // 0. Titik temu beberapa ujung (puncak, sudut, garis putus): ujung-ujung yang
+  //    berdekatan dikumpulkan, titik temunya = titik terdekat ke semua garis
+  //    arah ujung (kuadrat terkecil); tiap ujung dipotong/diperpanjang tepat ke
+  //    titik itu → sudut rapi tanpa ujung yang mencuat.
+  {
+    const E0 = [];
+    cand.forEach((L) => { if (L.pts.length < 4) return; for (const end of [0, 1]) { const d = endDir(L, end); if (d) E0.push({ L, end, d, p: end ? L.pts[L.pts.length - 1] : L.pts[0] }); } });
+    const par = E0.map((_, k) => k);
+    const find = (a) => { while (par[a] !== a) a = par[a] = par[par[a]]; return a; };
+    for (let a = 0; a < E0.length; a++) for (let b = a + 1; b < E0.length; b++) {
+      const A2 = E0[a], B2 = E0[b];
+      if (A2.L === B2.L && A2.L.pts.length < 30) continue;
+      const R = Math.max(2.5, 0.9 * (A2.L.w + B2.L.w));
+      const vx = B2.p[0] - A2.p[0], vy = B2.p[1] - A2.p[1];
+      // Kedua ujung harus saling menghadap (tidak ada yang berada di belakang).
+      if (Math.hypot(vx, vy) <= R && vx * A2.d[0] + vy * A2.d[1] >= -0.75 && -(vx * B2.d[0] + vy * B2.d[1]) >= -0.75) par[find(a)] = find(b);
+    }
+    const groups = new Map();
+    E0.forEach((e, k) => { const r = find(k); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(e); });
+    for (const G2 of groups.values()) {
+      if (G2.length < 2) continue;
+      let a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0, cx = 0, cy = 0;
+      for (const e of G2) {
+        const [dx, dy] = e.d, m11 = 1 - dx * dx, m12 = -dx * dy, m22 = 1 - dy * dy;
+        a11 += m11; a12 += m12; a22 += m22; b1 += m11 * e.p[0] + m12 * e.p[1]; b2 += m12 * e.p[0] + m22 * e.p[1];
+        cx += e.p[0] / G2.length; cy += e.p[1] / G2.length;
+      }
+      const det = a11 * a22 - a12 * a12;
+      let X = [cx, cy];
+      if (det > 0.05 * G2.length) {
+        const x = (b1 * a22 - b2 * a12) / det, y = (a11 * b2 - a12 * b1) / det;
+        const R = Math.max(...G2.map((e) => e.L.w)) * 2 + 2;
+        if (Math.hypot(x - cx, y - cy) <= R) X = [x, y];
+      }
+      for (const e of G2) {
+        const L = e.L, P = L.pts, n = P.length;
+        // X harus segaris dengan arah ujung ini (tidak membelokkan garis).
+        const ax = X[0] - e.p[0], ay = X[1] - e.p[1];
+        const along = ax * e.d[0] + ay * e.d[1], perp = Math.abs(-ax * e.d[1] + ay * e.d[0]);
+        if (perp > Math.max(1.2, 0.9 * L.w) || along > 3 * L.w || along < -2.5 * L.w) continue;
+        // Buang titik ujung yang sudah melewati X searah garis.
+        let cut = 0;
+        while (cut < Math.min(10, n - 3)) {
+          const q = e.end ? P[n - 1 - cut] : P[cut];
+          if ((q[0] - X[0]) * e.d[0] + (q[1] - X[1]) * e.d[1] > -0.25) cut++; else break;
+        }
+        const base = e.end ? P.slice(0, n - cut) : P.slice(cut);
+        const tip = e.end ? base[base.length - 1] : base[0];
+        if (!bridgeOk(L, tip, X)) continue;
+        L.pts = base;
+        setEnd(L, e.end, bridgePts(tip, X));
+        L.ext.push(...extOf(tip, X));
+        L.joined[e.end] = true;
+      }
+    }
+  }
+
+  // 1. Potong ujung yang menembus garis lain.
+  build();
+  cand.forEach((L, li) => {
+    for (const end of [0, 1]) {
+      const P = L.pts, n = P.length;
+      if (n < 6) continue;
+      let cut = null;
+      for (let k = 0; k < Math.min(12, n - 3) && !cut; k++) {
+        const ia = end ? n - 1 - k : k, ib = end ? n - 2 - k : k + 1;
+        const a = P[ia], b = P[ib];
+        const sl = segsNear((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 4);
+        for (let q = 0; q < sl.length; q += 2) {
+          const lj = sl[q], kk = sl[q + 1];
+          if (lj === li) continue;
+          const M = snap[lj], s0 = M[kk], s1 = M[kk + 1];
+          const dx = a[0] - b[0], dy = a[1] - b[1], l = Math.hypot(dx, dy);
+          if (l < 1e-6) continue;
+          // Sinar dari b ke a: titik potong di dalam segmen ab.
+          const t = raySeg(b[0], b[1], dx / l, dy / l, s0, s1, l);
+          if (t === null) continue;
+          // Ujung masih jauh melewati sumbu garis lain (bukan hanya menempel).
+          // Panjang bagian yang melewati sumbu garis lain: tembusan pendek
+          // dipotong; persilangan sungguhan (garis berlanjut jauh) dibiarkan.
+          let over = l - t;
+          for (let q = 0; q < k; q++) { const u = end ? P[n - 1 - q] : P[q], v = end ? P[n - 2 - q] : P[q + 1]; over += Math.hypot(u[0] - v[0], u[1] - v[1]); }
+          if (over < 0.6 || over > Math.max(3, 1.5 * L.w)) continue;
+          cut = { idx: ib, pt: [b[0] + (dx / l) * t, b[1] + (dy / l) * t] };
+          L.joined[end] = true;
+          break;
+        }
+      }
+      if (!cut) {
+        // Ujung menempel/masuk ke badan garis lain tanpa menyeberangi sumbunya:
+        // dihentikan tepat di sumbu garis itu (sambungan-T rapi).
+        if (L.joined[end]) continue;
+        const a = end ? P[n - 1] : P[0];
+        const sl = segsNear(a[0], a[1], 6);
+        let best = null, bd = Infinity;
+        for (let q = 0; q < sl.length; q += 2) {
+          const lj = sl[q], kk = sl[q + 1];
+          if (lj === li) continue;
+          const M = snap[lj], s0 = M[kk], s1 = M[kk + 1];
+          const vx = s1[0] - s0[0], vy = s1[1] - s0[1], vv = vx * vx + vy * vy;
+          let t = vv ? ((a[0] - s0[0]) * vx + (a[1] - s0[1]) * vy) / vv : 0;
+          t = Math.max(0, Math.min(1, t));
+          const X = [s0[0] + t * vx, s0[1] + t * vy], dd = Math.hypot(a[0] - X[0], a[1] - X[1]);
+          if (dd <= (cand[lj].w + L.w) / 2 && dd < bd) { bd = dd; best = X; }
+        }
+        if (!best || !bridgeOk(L, a, best)) continue;
+        setEnd(L, end, bridgePts(a, best));
+        L.ext.push(...extOf(a, best));
+        L.joined[end] = true;
+        continue;
+      }
+      if (end) { L.pts = P.slice(0, cut.idx + 1); L.pts.push(cut.pt); }
+      else { L.pts = P.slice(cut.idx); L.pts.unshift(cut.pt); }
+    }
+  });
+
+  // 2. Forecast sambungan.
+  build();
+  const ends = [];
+  cand.forEach((L, li) => { for (const end of [0, 1]) if (L.pts.length >= 4 && !L.joined[end]) { const d = endDir(L, end); if (d) ends.push({ L, li, end, d, p: end ? L.pts[L.pts.length - 1] : L.pts[0] }); } });
+  const used = new Set();
+  for (const E of ends) {
+    if (used.has(E)) continue;
+    const { L, li, end, d, p } = E;
+    const reach = Math.max(5, 3 * L.w);
+    let best = null;
+    // a) Bertemu ujung garis lain yang menghadap balik (garis putus).
+    for (const F of ends) {
+      if (F === E || F.L === L || used.has(F)) continue;
+      const vx = F.p[0] - p[0], vy = F.p[1] - p[1], l = Math.hypot(vx, vy);
+      if (l > reach * 1.5 || l < 1e-6) continue;
+      const cosA = (vx * d[0] + vy * d[1]) / l, cosB = -(vx * F.d[0] + vy * F.d[1]) / l;
+      if (cosA < 0.85 || cosB < 0.6) continue;
+      const score = l * (2 - cosA);
+      if (!best || score < best.score) best = { score, pt: F.p, F };
+    }
+    // b) Sinar arah garis (± sedikit, untuk garis melengkung) memotong garis lain.
+    for (const ang of [0, 0.15, -0.15, 0.3, -0.3]) {
+      const c = Math.cos(ang), sn = Math.sin(ang), dx = d[0] * c - d[1] * sn, dy = d[0] * sn + d[1] * c;
+      const sl = segsNear(p[0] + dx * reach / 2, p[1] + dy * reach / 2, reach / 2 + 2);
+      for (let q = 0; q < sl.length; q += 2) {
+        const lj = sl[q], kk = sl[q + 1];
+        if (lj === li && (end ? kk >= L.pts.length - 14 : kk < 13)) continue;
+        const M = snap[lj], t = raySeg(p[0], p[1], dx, dy, M[kk], M[kk + 1], reach);
+        if (t === null) continue;
+        const score = t * (1 + 2 * Math.abs(ang));
+        if (!best || score < best.score) best = { score, pt: [p[0] + dx * t, p[1] + dy * t] };
+      }
+    }
+    if (!best || !bridgeOk(L, p, best.pt)) continue;
+    setEnd(L, end, bridgePts(p, best.pt));
+    L.ext.push(...extOf(p, best.pt));
+    L.joined[end] = true;
+    used.add(E);
+    if (best.F) { used.add(best.F); best.F.L.joined[best.F.end] = true; }
+  }
+
+  // 3. Ujung meruncing yang tidak tersambung.
+  build();
+  cand.forEach((L, li) => {
+    for (const end of [0, 1]) {
+      // Hanya outline gelap: garis terang (pendar layar, teks) tidak diperpanjang.
+      if (L.joined[end] || L.pts.length < 4 || !L.dark) continue;
+      const d = endDir(L, end);
+      if (!d) continue;
+      const P = L.pts, a = end ? P[P.length - 1] : P[0];
+      const nx = -d[1], ny = d[0], sw = L.w / 2 + 2;
+      let last = null;
+      for (let t = 0.5; t <= 6; t += 0.5) {
+        const x = a[0] + d[0] * t, y = a[1] + d[1] * t;
+        if (x < 1 || y < 1 || x > w - 2 || y > h - 2) break;
+        // Berhenti sebelum menyentuh garis lain.
+        const sl = segsNear(x, y, 6);
+        let hit = false;
+        for (let q = 0; q < sl.length && !hit; q += 2) {
+          const lj = sl[q], kk = sl[q + 1];
+          if (lj === li && (end ? kk >= P.length - 14 : kk < 13)) continue;
+          const M = snap[lj];
+          if (distSeg(x, y, M[kk], M[kk + 1]) < (cand[lj].w + L.w) / 2) hit = true;
+        }
+        if (hit) break;
+        samp(x, y, C); samp(x + nx * sw, y + ny * sw, A); samp(x - nx * sw, y - ny * sw, B);
+        const yc = Y(C);
+        if (!(L.dark ? yc < Math.max(Y(A), Y(B)) - 25 : yc > Math.min(Y(A), Y(B)) + 25)) break;
+        last = [x, y];
+      }
+      if (!last) continue;
+      setEnd(L, end, bridgePts(a, last));
+      L.ext.push(...extOf(a, last));
+    }
+  });
+  // Ujung yang tersambung tidak diperpanjang lagi saat fitting.
+  cand.forEach((L) => { L.fix = L.joined; delete L.joined; });
+}
+
 // Deteksi garis tipis (≤ ~2,8 px sumber) yang lebih terang/gelap dari kedua
 // sisinya pada arah tegak lurus garis. Hasil: rantai titik tengah + lebar +
 // warna asli (dikoreksi dari campuran dengan latar). Garis dihapus dari px
 // (diisi rata-rata warna kedua sisinya) supaya tidak ikut menjadi isian.
-function detectLines(px, w, h, R = 2.5, WMAX = 3.6) {
+function detectLines(px, w, h, R = 2.5, WMAX = 3.6, grad = false) {
   const N = w * h;
   const of = orientField(px, w, h);
   const samp = (x, y, out) => {
@@ -524,7 +847,7 @@ function detectLines(px, w, h, R = 2.5, WMAX = 3.6) {
     let k = 1 / cv;
     for (let c = 0; c < 3; c++) { const d = cc[c] - mm[c]; if (d > 0.5) k = Math.min(k, (255 - mm[c]) / d); else if (d < -0.5) k = Math.min(k, -mm[c] / d); }
     const rgb = [0, 1, 2].map((c) => mm[c] + (cc[c] - mm[c]) * Math.max(1, k));
-    cand.push({ pts: pts.map((i) => [OX[i], OY[i]]), w: Math.max(1, wd), rgb, idx: pts });
+    cand.push({ pts: pts.map((i) => [OX[i], OY[i]]), w: Math.max(1, wd), rgb, idx: pts, dark: Y(cc) < Y(mm) });
   }
   // Warna garis yang mirip diseragamkan (dikelompokkan, berbobot panjang).
   const groups = [], la = new Float32Array(3), lb = new Float32Array(3);
@@ -537,6 +860,25 @@ function detectLines(px, w, h, R = 2.5, WMAX = 3.6) {
     g.r += L.rgb[0] * k; g.g += L.rgb[1] * k; g.b += L.rgb[2] * k; g.n += k; g.m.push(L);
   }
   for (const g of groups) for (const L of g.m) L.rgb = [g.r / g.n, g.g / g.n, g.b / g.n].map(clamp255);
+  if (grad) {
+    // Gradien: outline gelap satu gambar biasanya satu warna (hitam/tinta).
+    // Garis gelap yang warnanya tergeser oleh latar terang (kecokelatan di atas
+    // oranye) disamakan dengan warna outline utama.
+    let main = null;
+    for (const g of groups) {
+      lab([g.r / g.n, g.g / g.n, g.b / g.n], la);
+      if (la[0] < 35 && (!main || g.n > main.n)) main = g;
+    }
+    if (main) {
+      const mc = [main.r / main.n, main.g / main.n, main.b / main.n].map(clamp255);
+      lab(mc, lb);
+      for (const L of cand) {
+        lab(L.rgb, la);
+        if (la[0] < 50 && Math.hypot(la[0] - lb[0], la[1] - lb[1], la[2] - lb[2]) < 32) L.rgb = mc.slice();
+      }
+    }
+    joinLineEnds(cand, w, h, samp, Y);
+  }
   lines.push(...cand);
   // Hapus garis dari gambar: piksel dalam ±(w/2+1,5) diisi peralihan linear
   // antara warna kedua sisinya (diambil di luar garis, dari gambar asli).
@@ -560,6 +902,21 @@ function detectLines(px, w, h, R = 2.5, WMAX = 3.6) {
         px[p] = SB[0] + f * (SA[0] - SB[0]); px[p + 1] = SB[1] + f * (SA[1] - SB[1]); px[p + 2] = SB[2] + f * (SA[2] - SB[2]);
         hole[p >> 2] = 1;
       }
+    }
+    if (L.ext) {
+      for (const [x, y, nx, ny] of L.ext) {
+        sampO(x + (half + 1) * nx, y + (half + 1) * ny, SA); sampO(x - (half + 1) * nx, y - (half + 1) * ny, SB);
+        for (let t = -half; t <= half; t += 0.5) {
+          const xx = Math.round(x + t * nx), yy = Math.round(y + t * ny);
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const p = (yy * w + xx) * 4;
+          if (orig[p + 3] < 255) continue;
+          const f = (t + half) / (2 * half);
+          px[p] = SB[0] + f * (SA[0] - SB[0]); px[p + 1] = SB[1] + f * (SA[1] - SB[1]); px[p + 2] = SB[2] + f * (SA[2] - SB[2]);
+          hole[p >> 2] = 1;
+        }
+      }
+      delete L.ext;
     }
     delete L.idx;
   }
@@ -691,7 +1048,8 @@ function fitLines(lines, s) {
     // Ujung diperpanjang ±1,2 px sumber agar menyentuh titik/bentuk di ujungnya.
     if (K.length >= 2) {
       const ext = (a, b) => { const dx = a[0] - b[0], dy = a[1] - b[1], l = Math.hypot(dx, dy) || 1; a[0] += (dx / l) * 1.2 * s; a[1] += (dy / l) * 1.2 * s; };
-      ext(K[0], K[1]); ext(K[K.length - 1], K[K.length - 2]);
+      if (!(L.fix && L.fix[0])) ext(K[0], K[1]);
+      if (!(L.fix && L.fix[1])) ext(K[K.length - 1], K[K.length - 2]);
     }
     const p = [K[0][0], K[0][1]];
     for (let k = 0; k < K.length - 1; k++) {
