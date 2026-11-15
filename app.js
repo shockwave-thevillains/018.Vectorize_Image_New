@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150516';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150536';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -165,6 +165,9 @@ function removeItem(id) {
   const it = items[i];
   URL.revokeObjectURL(it.url);
   items.splice(i, 1);
+  clearTimeout(thumbTimers.get(id)); thumbTimers.delete(id);
+  const tu = rowEls.get(id)?.querySelector('.rthumb img')?.dataset.url;
+  if (tu) URL.revokeObjectURL(tu);
   rowEls.get(id)?.remove();
   rowEls.delete(id);
   if (selId === id) select(items[Math.min(i, items.length - 1)]?.id ?? null);
@@ -175,7 +178,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611150516');
+  const w = new Worker('worker.js?v=202611150536');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -195,7 +198,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611150516', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611150536', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -512,6 +515,7 @@ function createRow(it) {
     <span class="idx"></span>
     <span class="thumb"><img alt="" loading="lazy"></span>
     <span class="meta"><span class="oname"></span><span class="sub"></span></span>
+    <span class="rthumb" title="Hasil vektor"><img alt="" hidden></span>
     <span class="pal"></span>
     <span class="st"><span class="stt"></span><span class="bar"><b></b></span></span>
     <span class="acts">
@@ -551,6 +555,7 @@ function updateRow(it) {
       pal.appendChild(s);
     });
   }
+  updateResultThumb(it, li);
   const st = statusOf(it);
   const stEl = $('.st', li);
   stEl.className = 'st ' + st;
@@ -564,6 +569,35 @@ function updateRow(it) {
   $('[data-act="svg"]', li).disabled = !ok;
   $('[data-act="eps"]', li).disabled = !ok;
   li.classList.toggle('sel', it.id === selId);
+}
+
+// Pratinjau hasil vektor di baris antrean: SVG kecil (tanpa pengisi celah) yang
+// dibuat ulang hanya bila hasil atau editannya berubah, ditunda agar tidak
+// memperlambat pembaruan baris yang sering.
+const thumbTimers = new Map();
+function updateResultThumb(it, li) {
+  const img = $('.rthumb img', li);
+  if (!it.result) {
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.hidden = true; img.removeAttribute('src'); img.dataset.k = ''; img.dataset.url = '';
+    return;
+  }
+  const k = `${visKey(it)}|${JSON.stringify(it.recolor)}|${S.stacking}`;
+  if (img.dataset.k === k) return;
+  img.dataset.k = k;
+  clearTimeout(thumbTimers.get(it.id));
+  thumbTimers.set(it.id, setTimeout(() => {
+    thumbTimers.delete(it.id);
+    if (!it.result || img.dataset.k !== k) return;
+    const res = it.result, ed = editState(it);
+    const body = previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden: ed.hidden, gapFill: false, regionColor: ed.regionColor, absorbed: ed.absorbed });
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${res.W} ${res.H}" width="${res.srcW}" height="${res.srcH}" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    img.dataset.url = url;
+    img.src = url;
+    img.hidden = false;
+  }, 120));
 }
 
 function extLabel() {
