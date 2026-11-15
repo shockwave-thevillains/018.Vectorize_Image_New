@@ -143,23 +143,151 @@ function touchesHidden(res, sub, i, hidden) {
   return false;
 }
 
-// Garis pengisi celah: batas antar dua bentuk yang sama-sama tampil. Dengan rank,
-// hanya batas dengan bentuk yang digambar sesudahnya — garis meluas ke bawah
-// bentuk itu (tertutup), jadi celah tertutup tanpa ada bentuk yang menebal.
-function gapStrokes(res, i, hidden, sinkFactory, rank) {
+// Garis pengisi celah: batas antar dua bentuk yang sama-sama tampil, hanya batas
+// dengan bentuk yang digambar sesudahnya — garis meluas ke bawah bentuk itu
+// (tertutup), jadi celah tertutup tanpa ada bentuk yang menebal.
+// Di titik temu tiga bentuk, sudut ujung garis (lebar 2·hw) bisa menonjol ke
+// bentuk ketiga bila sudut antar batas di titik itu lancip dan bentuk ketiga
+// digambar lebih dulu. Ujung garis lalu dipendekkan tepat sejauh yang perlu:
+// hw / tan(sudut) — nol bila sudutnya >= 90°.
+function gapStrokes(res, i, hidden, sinkFactory, rank, hw = 0) {
   const segs = [];
+  const other = (ch, r) => (ch.a === r ? ch.b : ch.a);
+  const covers = (k, r) => k >= 0 && !hidden[k] && rank[k] > rank[r];
   for (const s of res.regions[i].subs) {
-    for (let n = 0; n < s.refs.length; n++) {
+    const m = s.refs.length;
+    for (let n = 0; n < m; n++) {
       const ref = s.refs[n];
       const ch = res.chains[ref >> 1];
       if (ch.a < 0 || ch.b < 0 || hidden[ch.a] || hidden[ch.b]) continue;
-      if (rank && rank[ch.a === i ? ch.b : ch.a] <= rank[i]) continue;
+      const j = other(ch, i);
+      if (rank[j] <= rank[i]) continue;
       const sink = sinkFactory();
-      walk([ref], res.chains, sink, false);
+      if (hw > 0 && m > 1) {
+        const rec = recSink();
+        walk([ref], res.chains, rec, false);
+        const sg = rec.segs;
+        if (!sg.length) continue;
+        const u0 = tanOut(sg, true), u1 = tanOut(sg, false);
+        // Sisi bentuk ini: rantai sebelum/sesudahnya di sub-path yang sama.
+        const prev = s.refs[(n + m - 1) % m], next = s.refs[(n + 1) % m];
+        let t0 = 0, t1 = 0;
+        if (!covers(other(res.chains[prev >> 1], i), i)) t0 = Math.max(t0, cut(u0, refTan(res, prev, false), hw));
+        if (!covers(other(res.chains[next >> 1], i), i)) t1 = Math.max(t1, cut(u1, refTan(res, next, true), hw));
+        // Sisi bentuk sesudahnya: rantai tetangga di sub-path bentuk itu.
+        const nb = neighborRefs(res, j, ref >> 1);
+        if (nb) {
+          // Bentuk j menelusuri rantai ini berlawanan arah: akhir walk j = awal walk ini.
+          if (!covers(other(res.chains[nb.next >> 1], j), i)) t0 = Math.max(t0, cut(u0, refTan(res, nb.next, true), hw));
+          if (!covers(other(res.chains[nb.prev >> 1], j), i)) t1 = Math.max(t1, cut(u1, refTan(res, nb.prev, false), hw));
+        }
+        if (!replayTrimmed(sg, t0, t1, sink)) continue;
+      } else walk([ref], res.chains, sink, false);
       segs.push(sink);
     }
   }
   return segs;
+}
+
+// Arah keluar (vektor satuan) dari titik awal (atStart) atau titik akhir segmen.
+function tanOut(sg, atStart) {
+  const q = atStart ? sg[0] : sg[sg.length - 1];
+  const n = q.length;
+  const x0 = atStart ? q[0] : q[n - 2], y0 = atStart ? q[1] : q[n - 1];
+  for (let k = atStart ? 2 : n - 4; atStart ? k < n : k >= 0; k += atStart ? 2 : -2) {
+    const dx = q[k] - x0, dy = q[k + 1] - y0, l = Math.hypot(dx, dy);
+    if (l > 1e-9) return [dx / l, dy / l];
+  }
+  return null;
+}
+// Arah keluar rantai ref (arah walk) dari titik awalnya atau dari titik akhirnya.
+function refTan(res, ref, atStart) {
+  const rec = recSink();
+  walk([ref], res.chains, rec, false);
+  return rec.segs.length ? tanOut(rec.segs, atStart) : null;
+}
+// Rantai sebelum & sesudah rantai idx di sub-path bentuk r.
+function neighborRefs(res, r, idx) {
+  for (const s of res.regions[r].subs) {
+    const m = s.refs.length;
+    if (m < 2) continue;
+    for (let k = 0; k < m; k++) if (s.refs[k] >> 1 === idx) return { prev: s.refs[(k + m - 1) % m], next: s.refs[(k + 1) % m] };
+  }
+  return null;
+}
+// Pemendekan ujung: u arah garis dari titik temu, v arah batas tetangga dari titik
+// temu yang sama; sudut lancip θ → sudut garis menonjol sejauh hw / tan θ.
+function cut(u, v, hw) {
+  if (!u || !v) return 0;
+  const c = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1]));
+  if (c <= 0) return 0;
+  const sn = Math.sqrt(1 - c * c);
+  return Math.min(4 * hw, (hw * c) / Math.max(sn, 1e-6));
+}
+
+// Perekam perintah M/L/C menjadi daftar segmen [x0,y0, ..., x1,y1].
+function recSink() {
+  const segs = [];
+  let x = 0, y = 0;
+  return {
+    segs,
+    M: (a, b) => { x = a; y = b; },
+    L: (a, b) => { segs.push([x, y, a, b]); x = a; y = b; },
+    C: (a, b, c, d, e, f) => { segs.push([x, y, a, b, c, d, e, f]); x = e; y = f; },
+    Z: () => {},
+  };
+}
+const bez = (q, t) => {
+  if (q.length === 4) return [q[0] + (q[2] - q[0]) * t, q[1] + (q[3] - q[1]) * t];
+  const u = 1 - t;
+  return [u * u * u * q[0] + 3 * u * u * t * q[2] + 3 * u * t * t * q[4] + t * t * t * q[6],
+    u * u * u * q[1] + 3 * u * u * t * q[3] + 3 * u * t * t * q[5] + t * t * t * q[7]];
+};
+// Potongan segmen q pada parameter [a, b] (de Casteljau).
+function subSeg(q, a, b) {
+  if (q.length === 4) { const p = bez(q, a), r = bez(q, b); return [p[0], p[1], r[0], r[1]]; }
+  const split = (c, t) => {
+    const l = (p, r) => [p[0] + (r[0] - p[0]) * t, p[1] + (r[1] - p[1]) * t];
+    const P0 = [c[0], c[1]], P1 = [c[2], c[3]], P2 = [c[4], c[5]], P3 = [c[6], c[7]];
+    const A = l(P0, P1), B = l(P1, P2), C = l(P2, P3), D = l(A, B), E = l(B, C), F = l(D, E);
+    return [[...P0, ...A, ...D, ...F], [...F, ...E, ...C, ...P3]];
+  };
+  let c = q;
+  if (b < 1) c = split(c, b)[0];
+  if (a > 0) c = split(c, a / b)[1];
+  return c;
+}
+// Parameter t pada jarak busur d dari awal segmen (tabel 16 sampel).
+function segLen(q) {
+  const L = [0];
+  let [px, py] = bez(q, 0);
+  for (let k = 1; k <= 16; k++) { const [x, y] = bez(q, k / 16); L.push(L[k - 1] + Math.hypot(x - px, y - py)); px = x; py = y; }
+  return L;
+}
+const tAt = (L, d) => {
+  for (let k = 1; k < L.length; k++) if (L[k] >= d) return (k - 1 + (d - L[k - 1]) / Math.max(1e-9, L[k] - L[k - 1])) / 16;
+  return 1;
+};
+// Memutar ulang segmen ke sink, dipendekkan t0 di awal dan t1 di akhir.
+// false bila garis terlalu pendek untuk dipendekkan.
+function replayTrimmed(segs, t0, t1, sink) {
+  const lens = segs.map(segLen);
+  const total = lens.reduce((a, L) => a + L[16], 0);
+  if (total <= t0 + t1 + 1e-6) return false;
+  let acc = 0, started = false;
+  const end = total - t1;
+  for (let k = 0; k < segs.length; k++) {
+    const L = lens[k], len = L[16];
+    const s0 = acc, s1 = acc + len;
+    acc = s1;
+    if (s1 <= t0 || s0 >= end) continue;
+    const a = s0 < t0 ? tAt(L, t0 - s0) : 0, b = s1 > end ? tAt(L, end - s0) : 1;
+    const q = a > 0 || b < 1 ? subSeg(segs[k], a, b) : segs[k];
+    if (!started) { sink.M(q[0], q[1]); started = true; }
+    if (q.length === 4) sink.L(q[2], q[3]);
+    else sink.C(q[2], q[3], q[4], q[5], q[6], q[7]);
+  }
+  return started;
 }
 
 // Garis tipis (stroke) di atas semua bentuk: kurva Bézier di koordinat kerja.
@@ -203,26 +331,19 @@ export function buildSVG(res, opt) {
   // Pengisi celah: tiap bentuk mendapat garis tepi sewarna di batas dengan bentuk
   // lain yang tampil, digambar tepat setelah isinya — menutup celah sub-piksel
   // antar bentuk bersebelahan tanpa membesarkan tepi luar objek.
-  const newGap = res.mode === 'gradient';
-  if (opt.gapFill && !newGap) {
-    // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk (seperti semula).
-    parts.push(`<g fill="none" stroke-width="${num(opt.gapWidth || 1)}" stroke-linejoin="round" stroke-linecap="round">`);
-    for (const it of items) {
-      const d = [];
-      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky))) d.push(g.text());
-      if (d.length) parts.push(`<path stroke="${hex(it.color)}" d="${d.join('')}"/>`);
-    }
-    parts.push('</g>');
-  }
+  // Garis pengisi digambar tepat setelah isi bentuknya dan hanya di batas dengan
+  // bentuk yang digambar sesudahnya (yang lalu menutupinya). Lapisan pengisi di
+  // bawah semua bentuk tidak cukup pada mode Tumpuk: bentuk besar di bawahnya
+  // menutup lapisan itu sehingga warnanya tampak sebagai garis terang di sambungan.
   const gw = num(gapWidthFor(opt, OW, res));
   for (const it of items) {
     const sk = svgSink(kx, ky);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
     const c = hex(it.color);
     parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
-    if (opt.gapFill && newGap) {
+    if (opt.gapFill) {
       const d = [];
-      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky), items.rank)) d.push(g.text());
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(kx, ky), items.rank, gw / (2 * kx))) d.push(g.text());
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${gw}" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
@@ -256,21 +377,8 @@ export function buildEPS(res, opt, title) {
   L.push('%%Page: 1 1');
   L.push('gsave');
   const col = (c) => c.map((v) => num(v / 255)).join(' ') + ' rg';
-  const newGap = res.mode === 'gradient';
-  if (opt.gapFill && !newGap) {
-    // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk (seperti semula).
-    L.push(`${num(opt.gapWidth || 1)} setlinewidth 1 setlinejoin 1 setlinecap`);
-    for (const it of items) {
-      const sinks = [];
-      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH)));
-      if (!sinks.length) continue;
-      L.push(col(it.color));
-      L.push('newpath');
-      for (const g of sinks) { g.end(); L.push(...g.out); }
-      L.push('s');
-    }
-  }
-  if (opt.gapFill && newGap) L.push(`${num(gapWidthFor(opt, OW, res))} setlinewidth 1 setlinejoin 1 setlinecap`);
+  const gwE = gapWidthFor(opt, OW, res);
+  if (opt.gapFill) L.push(`${num(gwE)} setlinewidth 1 setlinejoin 0 setlinecap`);
   for (const it of items) {
     L.push(col(it.color));
     L.push('newpath');
@@ -279,9 +387,9 @@ export function buildEPS(res, opt, title) {
     sk.end();
     L.push(...sk.out);
     L.push('f');
-    if (opt.gapFill && newGap) {
+    if (opt.gapFill) {
       const sinks = [];
-      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH), items.rank));
+      for (const i of it.regions) sinks.push(...gapStrokes(res, i, hidden, () => epsSink(kx, ky, OH), items.rank, gwE / (2 * kx)));
       if (sinks.length) {
         L.push('newpath');
         for (const g of sinks) { g.end(); L.push(...g.out); }
@@ -302,25 +410,19 @@ export function previewMarkup(res, opt) {
   const items = shapes(res, opt);
   const hidden = hiddenOf(res, opt);
   const parts = [];
-  // Mode Warna/Siluet: lapisan pengisi celah di bawah semua bentuk, sama seperti
-  // ekspor — tanpa ini, batas dua bentuk bersebelahan tampak sebagai garis tipis
-  // terang (antialias kedua tepi membuat latar ikut terlihat).
-  if (opt.gapFill && res.mode !== 'gradient') {
-    for (const it of items) {
-      const d = [];
-      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1))) d.push(g.text());
-      if (d.length) parts.push(`<path fill="none" stroke="${hex(it.color)}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" d="${d.join('')}"/>`);
-    }
-  }
+  // Pengisi celah sama seperti ekspor: garis sewarna setelah isi tiap bentuk, hanya
+  // di batas dengan bentuk sesudahnya — tanpa ini, sambungan dua bentuk tampak
+  // sebagai garis tipis terang (antialias kedua tepi membuat lapisan bawah terlihat).
+  const sw = res.mode === 'gradient' ? 1 : 1.5;
   for (const it of items) {
     const sk = svgSink(1, 1);
     for (const s of it.subs) walk(s.refs, res.chains, sk, true);
     const c = hex(it.color);
     parts.push(`<path fill="${c}" fill-rule="evenodd" d="${sk.text()}"/>`);
-    if (opt.gapFill && res.mode === 'gradient') {
+    if (opt.gapFill) {
       const d = [];
-      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1))) d.push(g.text());
-      if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
+      for (const i of it.regions) for (const g of gapStrokes(res, i, hidden, () => svgSink(1, 1), items.rank, 0.5 * (res.scale || 1))) d.push(g.text());
+      if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${sw}" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
   return parts.join('') + linesSVG(res, 1, 1);
