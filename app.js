@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150507';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150509';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -175,7 +175,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611150507');
+  const w = new Worker('worker.js?v=202611150509');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -195,7 +195,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611150507', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611150509', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -1068,6 +1068,7 @@ window.addEventListener('keydown', (e) => {
   if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
   const tools = { h: 'erase', g: 'merge', w: 'paint', H: 'erase', G: 'merge', W: 'paint' };
   if (tools[e.key] && selected()) { setTool(tools[e.key]); return; }
+  if (e.key === 'p' || e.key === 'P') { togglePanel(); return; }
   const modes = { c: 'compare', s: 'side', v: 'vector', o: 'outline' };
   if (modes[e.key] && selected()) setMode(modes[e.key]);
 });
@@ -1132,6 +1133,21 @@ $('#themeBtn').addEventListener('click', () => {
   applyTheme(theme);
 });
 applyTheme(theme);
+
+// ---------------------------------------------------------------- panel kanan
+function applyPanel(off) {
+  document.documentElement.classList.toggle('panel-off', off);
+  const b = $('#panelBtn');
+  b.setAttribute('aria-expanded', String(!off));
+  b.title = off ? 'Tampilkan panel pengaturan (P)' : 'Sembunyikan panel pengaturan (P)';
+}
+function togglePanel() {
+  const off = !document.documentElement.classList.contains('panel-off');
+  try { localStorage.setItem('vektor.panel', off ? 'hidden' : 'shown'); } catch { /* abaikan */ }
+  applyPanel(off);
+}
+$('#panelBtn').addEventListener('click', togglePanel);
+applyPanel(document.documentElement.classList.contains('panel-off'));
 
 const LABELS = {
   colorMerge: (v) => `ΔE ${v}`,

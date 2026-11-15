@@ -34,6 +34,7 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
 - **Palet per gambar**: ganti warna atau jadikan transparan.
 - **Tema terang/gelap**: tombol di kanan atas (otomatis → terang → gelap), tersimpan di browser.
+- **Sembunyikan panel pengaturan**: tombol panel di kanan atas (atau tombol **P**) menyembunyikan/menampilkan sidebar kanan agar area gambar selebar layar; pilihan tersimpan di browser.
 - **Bantuan (?)**: arahkan kursor ke ikon tanda tanya di samping pengaturan untuk penjelasan nilai kecil vs besar.
 - **Default**: tombol di atas panel mengembalikan semua pengaturan ke nilai bawaan (kode nama file dan nomor mulai tidak diubah).
 - **Kode nama file** ada di urutan pertama panel agar tidak lupa diganti.

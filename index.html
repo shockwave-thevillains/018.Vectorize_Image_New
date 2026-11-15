@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611150507">
+  <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; if (localStorage.getItem('vektor.panel') === 'hidden') document.documentElement.classList.add('panel-off'); } catch (e) { /* abaikan */ }</script>
+  <link rel="stylesheet" href="styles.css?v=202611150509">
 </head>
 <body>
   <header class="top">
@@ -22,6 +22,9 @@
     <button class="btn ghost" id="addBtn" type="button">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg>
       Tambah gambar
+    </button>
+    <button class="btn ghost icon" id="panelBtn" type="button" title="Sembunyikan panel pengaturan" aria-label="Panel pengaturan" aria-controls="settingsPanel" aria-expanded="true">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10 2.5v11" stroke="currentColor" stroke-width="1.4"/><path class="pb-fill" d="M10 3.2h3.8v9.6H10z" fill="currentColor"/></svg>
     </button>
     <button class="btn ghost icon theme-btn" id="themeBtn" type="button" title="Tema: otomatis" aria-label="Tema">
       <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
@@ -106,7 +109,7 @@
       </div>
     </section>
 
-    <aside class="panel" aria-label="Pengaturan">
+    <aside class="panel" id="settingsPanel" aria-label="Pengaturan">
       <div class="preset-row"><span>Pengaturan tersimpan otomatis di browser ini.</span><button type="button" class="btn ghost small" id="defaultsBtn" title="Kembalikan semua pengaturan ke nilai bawaan (kode nama file tidak diubah)">Default</button></div>
       <div class="panel-scroll">
         <section class="group">
@@ -310,6 +313,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611150507"></script>
+  <script type="module" src="app.js?v=202611150509"></script>
 </body>
 </html>

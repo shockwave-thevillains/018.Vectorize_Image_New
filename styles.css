@@ -153,6 +153,12 @@ svg { display: block; }
   grid-template-columns: minmax(0, 1fr) 368px;
   height: calc(100vh - 61px);
 }
+/* Panel pengaturan disembunyikan: area kerja memakai seluruh lebar. */
+.panel-off .layout { grid-template-columns: minmax(0, 1fr); }
+.panel-off .panel { display: none; }
+.panel-off .work { border-right: 0; }
+#panelBtn .pb-fill { transition: opacity 0.15s; }
+.panel-off #panelBtn .pb-fill { opacity: 0; }
 .work {
   display: grid;
   grid-template-rows: minmax(320px, 1fr) minmax(180px, 34%);
