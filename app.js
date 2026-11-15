@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150540';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150618';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -34,8 +34,8 @@ const DEFAULTS = {
   format: 'both',
 };
 // Bawaan yang berbeda per mode: DEFAULTS memakai nilai mode Warna (mode bawaan);
-// mode Siluet & Gradien memakai latar putih dan kepekaan warna 10.
-const MODE_DEFAULTS = { color: { bgKey: 'magenta', colorMerge: 17 } };
+// mode Gradien memakai latar Tanpa; mode Siluet latar putih; kepekaan warna 10.
+const MODE_DEFAULTS = { color: { bgKey: 'magenta', colorMerge: 17 }, gradient: { bgKey: 'none' } };
 const OTHER_DEFAULTS = { bgKey: 'white', colorMerge: 10 };
 const modeDefault = (mode, k) => (MODE_DEFAULTS[mode] && k in MODE_DEFAULTS[mode] ? MODE_DEFAULTS[mode][k] : OTHER_DEFAULTS[k]);
 // Ganti mode: pengaturan yang masih bernilai bawaan mode lama ikut ke bawaan mode
@@ -54,12 +54,15 @@ function loadSettings() {
     if (v4) {
       const st = JSON.parse(v4);
       // Sekali: bawaan lama mode Warna (latar putih, kepekaan 10) → bawaan baru.
-      if (localStorage.getItem('vektor.defaults.rev') !== '2') {
-        localStorage.setItem('vektor.defaults.rev', '2');
-        if ((st.mode || 'color') === 'color') {
+      const rev = Number(localStorage.getItem('vektor.defaults.rev')) || 0;
+      if (rev < 3) {
+        localStorage.setItem('vektor.defaults.rev', '3');
+        if (rev < 2 && (st.mode || 'color') === 'color') {
           if (st.bgKey === 'white') st.bgKey = 'magenta';
           if (st.colorMerge === 10) st.colorMerge = 17;
         }
+        // Mode Gradien: bawaan latar lama (putih) → Tanpa.
+        if (st.mode === 'gradient' && st.bgKey === 'white') st.bgKey = 'none';
         localStorage.setItem('vektor.settings.v4', JSON.stringify(st));
       }
       return st;
@@ -200,7 +203,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611150540');
+  const w = new Worker('worker.js?v=202611150618');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -220,7 +223,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611150540', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611150618', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {

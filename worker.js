@@ -97,7 +97,13 @@ async function vectorize(file, o, progress, aiMask) {
     for (let k = 0; k < 2; k++) bilateral(src, sw, sh, 3, 2.2, sr);
     // Gradasi lebar (cahaya lampu, dinding) dihaluskan berjangkauan jauh tanpa
     // menyeberangi tepi kontras → pita warna nanti berkontur mulus.
-    domainTransform(src, sw, sh, Math.max(4, Math.min(sw, sh) / 90), 45, 3);
+    // (Domain transform hanya bila penghalusan bidang landai dimatikan: arahnya
+    // horizontal/vertikal sehingga halo cahaya menjadi kotak.)
+    if (o.flatSmooth === false) domainTransform(src, sw, sh, Math.max(4, Math.min(sw, sh) / 90), 45, 3);
+    // Bidang landai (langit, cahaya bulan/matahari): grain dihaluskan isotropik
+    // berjangkauan jauh di resolusi rendah → kontur pita warna bulat & mulus,
+    // bukan kotak bergerigi. Tepi/garis kontras tidak tersentuh.
+    if (o.flatSmooth !== false) smoothFlat(src, sw, sh, ...(o._fs || []));
     for (let i = 0, p = 0; i < keep.length; i++, p += 4) {
       const m = keep[i];
       if (!m) continue;
@@ -1347,6 +1353,87 @@ function domainTransform(px, w, h, ss, sr, iters) {
 // Filter bilateral (jendela (2r+1)², sigma ruang ss, sigma warna sr dalam RGB):
 // rata-rata berbobot tetangga yang dekat posisinya DAN warnanya. Grain halus
 // diratakan; tepi kontras (selisih >> sr) tidak tercampur.
+// Penghalusan bidang landai: gambar diperkecil f× (rata-rata kotak, grain hilang),
+// di-bilateral beberapa kali (jangkauan efektif ss·f px, hanya antar warna
+// mirip), diperbesar bilinear, lalu dicampur ke gambar hanya di piksel yang
+// selisihnya kecil (bidang landai); di dekat tepi/garis gambar asli dipakai.
+function smoothFlat(px, w, h, f = 0, ss = 2.5, sr = 9, iters = 3, E = 14) {
+  if (!f) f = Math.max(2, Math.round(Math.min(w, h) / 180));
+  const N = w * h;
+  // Peta tepi dari gambar yang diburamkan (grain hilang, tepi nyata tetap ada).
+  const bl = new Float32Array(N * 3);
+  for (let i = 0, p = 0; i < N; i++, p += 4) { bl[i * 3] = px[p]; bl[i * 3 + 1] = px[p + 1]; bl[i * 3 + 2] = px[p + 2]; }
+  const tmp = new Float32Array(N * 3);
+  const R = Math.max(1, Math.round(f / 2));
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) { let a = 0, n = 0; for (let d = -R; d <= R; d++) { const xx = x + d; if (xx < 0 || xx >= w) continue; a += bl[(y * w + xx) * 3 + c]; n++; } tmp[(y * w + x) * 3 + c] = a / n; }
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) { let a = 0, n = 0; for (let d = -R; d <= R; d++) { const yy = y + d; if (yy < 0 || yy >= h) continue; a += tmp[(yy * w + x) * 3 + c]; n++; } bl[(y * w + x) * 3 + c] = a / n; }
+    }
+  }
+  const edge = new Uint8Array(N);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    let g = 0;
+    for (let c = 0; c < 3; c++) g += Math.abs(bl[(i + 1) * 3 + c] - bl[(i - 1) * 3 + c]) + Math.abs(bl[(i + w) * 3 + c] - bl[(i - w) * 3 + c]);
+    if (g > E) edge[i] = 1;
+  }
+  for (let i = 0, p = 3; i < N; i++, p += 4) if (px[p] < 255) edge[i] = 1;
+  // Jarak (catur) ke tepi terdekat: bobot halus 0 di tepi → 1 di jarak >= D.
+  const D = f + 2;
+  const dist = new Uint8Array(N).fill(255);
+  let cur = [];
+  for (let i = 0; i < N; i++) if (edge[i]) { dist[i] = 0; cur.push(i); }
+  for (let d = 1; d <= D && cur.length; d++) {
+    const nx = [];
+    for (const i of cur) {
+      const x = i % w, y = (i / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const q = yy * w + xx;
+        if (dist[q] > d) { dist[q] = d; nx.push(q); }
+      }
+    }
+    cur = nx;
+  }
+  const lw = Math.max(1, Math.ceil(w / f)), lh = Math.max(1, Math.ceil(h / f));
+  const lo = new Uint8ClampedArray(lw * lh * 4);
+  for (let y = 0; y < lh; y++) {
+    for (let x = 0; x < lw; x++) {
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let yy = y * f; yy < Math.min(h, y * f + f); yy++) {
+        for (let xx = x * f; xx < Math.min(w, x * f + f); xx++) {
+          const p = (yy * w + xx) * 4;
+          if (px[p + 3] < 255) continue;
+          r += px[p]; g += px[p + 1]; b += px[p + 2]; n++;
+        }
+      }
+      const q = (y * lw + x) * 4;
+      if (n) { lo[q] = r / n; lo[q + 1] = g / n; lo[q + 2] = b / n; lo[q + 3] = 255; }
+    }
+  }
+  const r = Math.max(2, Math.ceil(ss * 1.8));
+  for (let k = 0; k < iters; k++) bilateral(lo, lw, lh, r, ss, sr);
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5)), y0 = Math.floor(fy), y1 = Math.min(lh - 1, y0 + 1), ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, p = i * 4;
+      const wgt = Math.min(1, dist[i] / D);
+      if (!wgt) continue;
+      const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5)), x0 = Math.floor(fx), x1 = Math.min(lw - 1, x0 + 1), tx = fx - x0;
+      const a = (y0 * lw + x0) * 4, b = (y0 * lw + x1) * 4, c = (y1 * lw + x0) * 4, d = (y1 * lw + x1) * 4;
+      if (lo[a + 3] < 255 || lo[b + 3] < 255 || lo[c + 3] < 255 || lo[d + 3] < 255) continue;
+      for (let ch = 0; ch < 3; ch++) {
+        const v = (lo[a + ch] * (1 - tx) + lo[b + ch] * tx) * (1 - ty) + (lo[c + ch] * (1 - tx) + lo[d + ch] * tx) * ty;
+        px[p + ch] += wgt * (v - px[p + ch]);
+      }
+    }
+  }
+}
+
 function bilateral(px, w, h, r, ss, sr) {
   const src = new Uint8ClampedArray(px);
   const sw = [];
@@ -2705,16 +2792,33 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
     }
     return cnt ? soft / cnt : 0;
   }
+  const arcOn = o.mode === 'gradient' && o.arcSnap !== false;
+  const disks = [], pending = [];
   chains.forEach((ch, i) => {
     const seq = ch.raw.open;
     const f = pickFit(ch);
     const adj = snapOn ? makeSnap(ch.a, ch.b) : null;
-    const geo = seq ? f.open(seq, jpos(seq[0]), jpos(seq[seq.length - 1]), adj) : f.closed(ch.raw.closed, adj);
+    let geo = seq ? f.open(seq, jpos(seq[0]), jpos(seq[seq.length - 1]), adj) : f.closed(ch.raw.closed, adj);
+    // Gradien: batas yang hampir lingkaran/busur (bulan, matahari, cincin cahaya)
+    // dijadikan lingkaran/busur sempurna.
+    if (arcOn) {
+      const P = sampleGeo(geo);
+      const a = arcSnap(P, !seq, s, W, H);
+      if (a) { geo = a.geo; if (a.R >= 12 * s) disks.push(a); } else pending.push([ch, P, !seq]);
+    }
     ch.p = geo.p; ch.c = geo.c;
     delete ch.raw;
     nodes += geo.c.length;
     if (i % 256 === 0) progress(0.4 + 0.6 * (i / chains.length));
   });
+  // Cincin cahaya: batas di sekitar lingkaran besar (bulan, matahari) yang
+  // jaraknya ke pusat lingkaran itu hampir tetap → busur sepusat.
+  if (disks.length) {
+    for (const [ch, P, closed] of pending) {
+      const g = concentricSnap(P, closed, disks, s);
+      if (g) { ch.p = g.p; ch.c = g.c; nodes += g.c.length - 1; }
+    }
+  }
   regions.sort((a, b) => b.area - a.area);
   const compToReg = new Int32Array(info.count).fill(-1);
   regions.forEach((r, i) => { compToReg[r.comp] = i; delete r.comp; });
@@ -2723,6 +2827,122 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
     ch.b = ch.b >= 0 ? compToReg[ch.b] : -1;
   }
   return { chains, regions, nodes, compToReg };
+}
+
+// Sampel kurva (L/C) menjadi titik-titik [x0,y0,x1,y1,...].
+function sampleGeo(geo) {
+  const P = [], p = geo.p, c = geo.c;
+  let x = p[0], y = p[1], k = 2;
+  P.push(x, y);
+  for (const cmd of c) {
+    if (cmd === 0) { x = p[k]; y = p[k + 1]; k += 2; P.push(x, y); continue; }
+    const x1 = p[k], y1 = p[k + 1], x2 = p[k + 2], y2 = p[k + 3], x3 = p[k + 4], y3 = p[k + 5];
+    for (let t = 1; t <= 8; t++) {
+      const u = t / 8, v = 1 - u;
+      P.push(v * v * v * x + 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u * x3, v * v * v * y + 3 * v * v * u * y1 + 3 * v * u * u * y2 + u * u * u * y3);
+    }
+    x = x3; y = y3; k += 6;
+  }
+  return P;
+}
+const polyLen = (P) => { let L = 0; for (let i = 2; i < P.length; i += 2) L += Math.hypot(P[i] - P[i - 2], P[i + 1] - P[i - 1]); return L; };
+// Sapuan sudut titik-titik terhadap pusat; null bila arah putarnya tidak
+// konsisten (balik arah > tol bagian sapuan). Titik dijarangkan per langkah
+// sudut minimal agar gerigi kecil tidak dihitung sebagai balik arah.
+function sweepOf(P, cx, cy, tol = 0.05, minStep = 0) {
+  const n = P.length / 2;
+  let sweep = 0, pos = 0, neg = 0, prev = Math.atan2(P[1] - cy, P[0] - cx);
+  for (let i = 1; i < n; i++) {
+    const a = Math.atan2(P[i * 2 + 1] - cy, P[i * 2] - cx);
+    if (minStep && i < n - 1) {
+      let dd = a - prev;
+      while (dd > Math.PI) dd -= 2 * Math.PI;
+      while (dd < -Math.PI) dd += 2 * Math.PI;
+      if (Math.abs(dd) < minStep) continue;
+    }
+    let d = a - prev;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    sweep += d; if (d > 0) pos += d; else neg -= d;
+    prev = a;
+  }
+  return Math.min(pos, neg) > tol * Math.abs(sweep) ? null : sweep;
+}
+// Busur Bézier berpusat (cx,cy) dari titik awal ke titik akhir P (ujung tepat),
+// jari-jari diinterpolasi dari ujung ke ujung; tertutup → lingkaran jari-jari R.
+function arcGeo(P, closed, cx, cy, R, sweep) {
+  const n = P.length / 2;
+  const a0 = Math.atan2(P[1] - cy, P[0] - cx);
+  const r0 = Math.hypot(P[0] - cx, P[1] - cy), r1 = Math.hypot(P[(n - 1) * 2] - cx, P[(n - 1) * 2 + 1] - cy);
+  const span = closed ? Math.sign(sweep) * 2 * Math.PI : sweep;
+  const segs = Math.max(closed ? 4 : 1, Math.ceil(Math.abs(span) / (Math.PI / 2)));
+  const dA = span / segs, kk = (4 / 3) * Math.tan(dA / 4);
+  const rAt = (t) => (closed ? R : r0 + (r1 - r0) * t);
+  const op = [closed ? cx + R * Math.cos(a0) : P[0], closed ? cy + R * Math.sin(a0) : P[1]], oc = [];
+  for (let j = 0; j < segs; j++) {
+    const a = a0 + dA * j, b = a + dA, ra = rAt(j / segs), rb = rAt((j + 1) / segs);
+    const ax = cx + ra * Math.cos(a), ay = cy + ra * Math.sin(a);
+    let bx = cx + rb * Math.cos(b), by = cy + rb * Math.sin(b);
+    if (j === segs - 1) {
+      if (closed) { bx = op[0]; by = op[1]; } else { bx = P[(n - 1) * 2]; by = P[(n - 1) * 2 + 1]; }
+    }
+    oc.push(1);
+    op.push(ax - kk * ra * Math.sin(a), ay + kk * ra * Math.cos(a), bx + kk * rb * Math.sin(b), by - kk * rb * Math.cos(b), bx, by);
+  }
+  return { p: Float32Array.from(op), c: Uint8Array.from(oc) };
+}
+// Lingkaran/busur kuadrat terkecil (Kasa). Diterima bila panjang >= 30 px
+// sumber, busur >= 60°, arah putar konsisten, simpangan kecil (rms <= max(0,35 px,
+// 2 % R), maks <= max(1,2 px, 6 % R)).
+function arcSnap(P, closed, s, W, H) {
+  const n = P.length / 2;
+  if (n < 12 || polyLen(P) < 30 * s) return null;
+  let mx = 0, my = 0;
+  for (let i = 0; i < n; i++) { mx += P[i * 2]; my += P[i * 2 + 1]; }
+  mx /= n; my /= n;
+  let Suu = 0, Suv = 0, Svv = 0, Suuu = 0, Svvv = 0, Suvv = 0, Svuu = 0;
+  for (let i = 0; i < n; i++) {
+    const u = P[i * 2] - mx, v = P[i * 2 + 1] - my;
+    Suu += u * u; Suv += u * v; Svv += v * v; Suuu += u * u * u; Svvv += v * v * v; Suvv += u * v * v; Svuu += v * u * u;
+  }
+  const det = Suu * Svv - Suv * Suv;
+  if (Math.abs(det) < 1e-9) return null;
+  const b1 = 0.5 * (Suuu + Suvv), b2 = 0.5 * (Svvv + Svuu);
+  const uc = (b1 * Svv - b2 * Suv) / det, vc = (Suu * b2 - Suv * b1) / det;
+  const cx = uc + mx, cy = vc + my;
+  const R = Math.sqrt(uc * uc + vc * vc + (Suu + Svv) / n);
+  if (!(R >= 6 * s) || R > 0.5 * Math.max(W, H)) return null;
+  let ss = 0, mxd = 0;
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(Math.hypot(P[i * 2] - cx, P[i * 2 + 1] - cy) - R);
+    ss += d * d; if (d > mxd) mxd = d;
+  }
+  if (Math.sqrt(ss / n) > Math.max(0.35 * s, 0.02 * R) || mxd > Math.max(1.2 * s, 0.06 * R)) return null;
+  const sweep = sweepOf(P, cx, cy);
+  if (sweep === null) return null;
+  if (closed ? Math.abs(Math.abs(sweep) - 2 * Math.PI) > 0.3 : Math.abs(sweep) < Math.PI / 3) return null;
+  return { geo: arcGeo(P, closed, cx, cy, R, sweep), cx, cy, R };
+}
+// Busur sepusat dengan lingkaran besar terdekat: jarak titik ke pusat hampir
+// tetap (rentang persentil 10–90 <= 12 % median), di luar lingkaran itu
+// (1,05–4 × R), sapuan >= 45° satu arah, panjang >= 20 px sumber.
+function concentricSnap(P, closed, disks, s) {
+  const n = P.length / 2;
+  if (n < 8 || polyLen(P) < 20 * s) return null;
+  let best = null;
+  for (const d of disks) {
+    const ds = new Float64Array(n);
+    for (let i = 0; i < n; i++) ds[i] = Math.hypot(P[i * 2] - d.cx, P[i * 2 + 1] - d.cy);
+    const sorted = Float64Array.from(ds).sort();
+    const med = sorted[n >> 1], lo = sorted[Math.floor(n * 0.1)], hi = sorted[Math.floor(n * 0.9)];
+    if (med < 1.05 * d.R || med > 4 * d.R) continue;
+    const spread = (hi - lo) / med;
+    if (spread > 0.15 || (best && spread >= best.spread)) continue;
+    const sweep = sweepOf(P, d.cx, d.cy, 0.15, (4 * s) / med);
+    if (sweep === null || (closed ? Math.abs(Math.abs(sweep) - 2 * Math.PI) > 0.4 : Math.abs(sweep) < Math.PI / 4)) continue;
+    best = { spread, d, med, sweep };
+  }
+  return best ? arcGeo(P, closed, best.d.cx, best.d.cy, best.med, best.sweep) : null;
 }
 
 function polyArea(V, W1) {
