@@ -86,7 +86,7 @@ async function vectorize(file, o, progress, aiMask) {
   // supaya area halus menjadi bentuk besar yang mulus; tepi kontras tetap tajam.
   // Gradien: garis tipis dideteksi dulu, dihapus dari gambar (diisi warna
   // latarnya), lalu digambar ulang sebagai garis vektor bertebal seragam.
-  let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh) : [];
+  let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh, ...(o._dl || [])) : [];
   let flatEdge = null;
   if (thinLines.length) g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   if (o.mode === 'gradient') {
@@ -156,7 +156,7 @@ async function vectorize(file, o, progress, aiMask) {
   // Warna + Rapikan, gambar kaya warna/tekstur (palet >= 24): garis tipis yang
   // pecah di isian ditambahkan sebagai stroke rata di atasnya. Isian tidak
   // diubah (topologi & putih tetap). Ilustrasi flat: garisnya sudah tegas.
-  if (raw && pal.length >= 24) thinLines = detectLines(raw, sw, sh);
+  if (raw && pal.length >= 24) thinLines = detectLines(raw, sw, sh, 2, 2.8);
   progress(0.06, 'palet');
 
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
@@ -203,7 +203,26 @@ async function vectorize(file, o, progress, aiMask) {
   const comp = new Int32Array(N);
   // Gradien: cahaya di sekitar benda terang yang bulat (bulan, matahari) dibuat
   // menjadi cincin sepusat yang makin redup ke luar.
-  if (o.mode === 'gradient' && o.glowRings !== false) o = { ...o, _glow: glowRings(lab, data, W, H, s, pal, comp, order) };
+  let glows = [], glowFlag = null;
+  if (o.mode === 'gradient' && o.glowRings !== false) {
+    glowFlag = new Uint8Array(N);
+    // Garis vektor (outline yang dihapus dari isian) menjadi pembatas cahaya.
+    const wall = new Uint8Array(N);
+    for (const L of thinLines) {
+      const rr = Math.max(1, Math.ceil(((L.w || 1) / 2 + 0.75) * s));
+      for (let k = 0; k < L.pts.length; k++) {
+        const [ax, ay] = L.pts[k], [bx, by] = L.pts[Math.min(L.pts.length - 1, k + 1)];
+        const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * s));
+        for (let q = 0; q <= steps; q++) {
+          const cx = ((ax + (bx - ax) * (q / steps)) + 0.5) * s, cy = ((ay + (by - ay) * (q / steps)) + 0.5) * s;
+          for (let yy = Math.max(0, Math.floor(cy - rr)); yy <= Math.min(H - 1, Math.ceil(cy + rr)); yy++)
+            for (let xx = Math.max(0, Math.floor(cx - rr)); xx <= Math.min(W - 1, Math.ceil(cx + rr)); xx++)
+              if ((xx + 0.5 - cx) ** 2 + (yy + 0.5 - cy) ** 2 <= rr * rr) wall[yy * W + xx] = 1;
+        }
+      }
+    }
+    glows = glowRings(lab, data, W, H, s, pal, comp, order, glowFlag, wall);
+  }
   // Gradien: noise JPEG antar tingkat warna yang berdekatan dibuang lebih tegas.
   const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : clean ? 2.5 : 1) * s * s));
   // Gradien / Rapikan: bintik kecil yang kontras (titik grid, bintang, butir nasi)
@@ -332,6 +351,17 @@ async function vectorize(file, o, progress, aiMask) {
     const r = out.compToReg[c];
     if (r >= 0) out.regions[r].f = f;
   }
+  // Cahaya: region langit = bentuk yang sebagian besar pikselnya di jangkauan
+  // cahaya adalah langit (ditandai saat cahaya dikeluarkan).
+  const glowOut = [];
+  if (glows.some((g) => g.levels && g.levels.length)) {
+    const all = glowSkyComps(glows, glowFlag, comp, info.count, W, H);
+    glows.forEach((g, gi) => {
+      const regs = [];
+      for (const c of all[gi]) { const r = out.compToReg[c]; if (r >= 0) regs.push(r); }
+      if (regs.length && g.levels && g.levels.length) glowOut.push({ cx: g.cx, cy: g.cy, R: g.R, G: g.G, levels: g.levels, regions: regs });
+    });
+  }
 
   // Peta region beresolusi sumber (dikecilkan bila besar) untuk klik & sorot instan.
   const q = Math.min(1, Math.sqrt(2e6 / (sw * sh)));
@@ -358,6 +388,7 @@ async function vectorize(file, o, progress, aiMask) {
     regions: out.regions,
     nodes: out.nodes,
     lines: fitLines(thinLines, s),
+    glows: glowOut,
     rmap,
     rmapW: mw,
     rmapH: mh,
@@ -369,7 +400,7 @@ async function vectorize(file, o, progress, aiMask) {
 // sisinya pada arah tegak lurus garis. Hasil: rantai titik tengah + lebar +
 // warna asli (dikoreksi dari campuran dengan latar). Garis dihapus dari px
 // (diisi rata-rata warna kedua sisinya) supaya tidak ikut menjadi isian.
-function detectLines(px, w, h) {
+function detectLines(px, w, h, R = 2.5, WMAX = 3.6) {
   const N = w * h;
   const of = orientField(px, w, h);
   const samp = (x, y, out) => {
@@ -394,18 +425,28 @@ function detectLines(px, w, h) {
       const nx = -of.TY[i], ny = of.TX[i];
       // Puncak garis dicari sub-piksel di sepanjang normal (±0,75 px): garis
       // 1–2 px yang miring sering berpusat di antara dua piksel.
-      let st = 0, bt = 0;
-      for (let t = -0.75; t <= 0.75; t += 0.25) {
-        const cx = x + t * nx, cy = y + t * ny;
-        samp(cx, cy, C); samp(cx + 2 * nx, cy + 2 * ny, A); samp(cx - 2 * nx, cy - 2 * ny, B);
-        for (let c = 0; c < 3; c++) M[c] = (A[c] + B[c]) / 2;
-        const yc = Y(C), ya = Y(A), yb = Y(B);
-        if (!((yc > ya + 8 && yc > yb + 8) || (yc < ya - 8 && yc < yb - 8))) continue;
-        const v = d3(C, M);
-        if (v <= st || d3(A, B) > 0.7 * v) continue;
-        st = v; bt = t;
-        for (let c = 0; c < 3; c++) { bC[c] = C[c]; bM[c] = M[c]; }
+      // Garis gelap (outline) boleh lebih tebal (R, WMAX); garis terang memakai
+      // batas lama (2 px, 2,8 px) supaya pendar terang tidak ikut terhapus.
+      let st = 0, bt = 0, dark = false, Rr = R;
+      for (let pass = 0; pass < 2; pass++) {
+        st = 0; bt = 0;
+        for (let t = -0.75; t <= 0.75; t += 0.25) {
+          const cx = x + t * nx, cy = y + t * ny;
+          samp(cx, cy, C); samp(cx + Rr * nx, cy + Rr * ny, A); samp(cx - Rr * nx, cy - Rr * ny, B);
+          for (let c = 0; c < 3; c++) M[c] = (A[c] + B[c]) / 2;
+          const yc = Y(C), ya = Y(A), yb = Y(B);
+          const isDark = yc < ya - 8 && yc < yb - 8;
+          if (!((yc > ya + 8 && yc > yb + 8) || isDark)) continue;
+          if (pass === 1 && isDark) continue;
+          const v = d3(C, M);
+          if (v <= st || d3(A, B) > 0.7 * v) continue;
+          st = v; bt = t; dark = isDark;
+          for (let c = 0; c < 3; c++) { bC[c] = C[c]; bM[c] = M[c]; }
+        }
+        if (dark || Rr === 2 || !st) break;
+        Rr = 2;
       }
+      const WM = dark ? WMAX : Math.min(WMAX, 2.8), RR = dark ? Rr : 2;
       // Hanya piksel yang paling dekat ke puncak (|t| ≤ 0,5) → punggung ±1 px.
       if (st < 28 || Math.abs(bt) > 0.5) continue;
       const cx = x + bt * nx, cy = y + bt * ny;
@@ -413,13 +454,13 @@ function detectLines(px, w, h) {
       let wd = 0, flat = 0;
       for (const sg of [1, -1]) {
         let t = 0.25;
-        for (; t <= 3; t += 0.25) if (d3(samp(cx + sg * t * nx, cy + sg * t * ny, Q), bM) < st / 2) break;
+        for (; t <= WM + 0.2; t += 0.25) if (d3(samp(cx + sg * t * nx, cy + sg * t * ny, Q), bM) < st / 2) break;
         wd += t - 0.125;
         // Latar di sisi ini harus rata (bukan celah gelap di antara dua garis terang).
-        const s2 = samp(cx + sg * 2 * nx, cy + sg * 2 * ny, A), s4 = samp(cx + sg * 3.5 * nx, cy + sg * 3.5 * ny, B);
+        const s2 = samp(cx + sg * RR * nx, cy + sg * RR * ny, A), s4 = samp(cx + sg * (RR + 1.5) * nx, cy + sg * (RR + 1.5) * ny, B);
         if (d3(s2, s4) < 0.6 * st) flat++;
       }
-      if (wd > 2.8 || !flat) continue;
+      if (wd > WM || !flat) continue;
       S[i] = st; WD[i] = wd; NX[i] = nx; NY[i] = ny; OX[i] = cx; OY[i] = cy;
       for (let c = 0; c < 3; c++) { CR[i * 3 + c] = bC[c]; BG[i * 3 + c] = bM[c]; }
       mask[i] = 1;
@@ -1190,6 +1231,7 @@ function assignLabels(data, W, H, s, pal, o) {
     }
   }
 
+  const grow2 = o.mode === 'gradient';
   // Region growing: piksel transisi mengambil warna tetangga yang paling mirip.
   let cur = [];
   const queued = new Uint8Array(N);
@@ -1215,6 +1257,13 @@ function assignLabels(data, W, H, s, pal, o) {
       if (x < W - 1) tryL(lab[i + 1]);
       if (i >= W) tryL(lab[i - W]);
       if (i + W < N) tryL(lab[i + W]);
+      // Gradien: piksel yang warnanya jauh dari semua tetangganya (inti garis
+      // tipis yang buram, mis. garis punggung gunung di depan langit) tidak
+      // ditelan tetangga: ambil warna palet terdekat bila jauh lebih cocok.
+      if (grow2 && best >= 0 && bd > 324) {
+        const g = nearest(data[p], data[p + 1], data[p + 2]);
+        if (nD1 * nD1 < 0.3 * bd && pal[g].L < tmpLab[0] + 5) best = g;
+      }
       choice[n] = best;
     }
     const next = [];
@@ -1793,7 +1842,7 @@ function boxBlur(A, w, h, r) {
 // 3. Piksel langit di dalam batas cahaya diberi warna palet terdekat dari
 //    profil pada jarak & sudutnya → batas pita berupa busur sepusat. Benda di
 //    depan (warna jauh dari profil) tidak diubah.
-function glowRings(lab, data, W, H, s, pal, comp, order) {
+function glowRings(lab, data, W, H, s, pal, comp, order, glowFlag, wall) {
   const info = label(lab, W, H, comp, order);
   const minDim = Math.min(W, H);
   const disks = [];
@@ -1850,7 +1899,7 @@ function glowRings(lab, data, W, H, s, pal, comp, order) {
     for (let k = 0; k < m.length; k++) if (m[k]) { inl++; bins[Math.floor(((Math.atan2(B[k * 2 + 1] - fit.cy, B[k * 2] - fit.cx) + Math.PI) / (2 * Math.PI)) * 36) % 36] = 1; }
     let cov = 0;
     for (const b of bins) cov += b;
-    if (inl < 0.4 * m.length || cov < 12) continue;
+    if (inl < 0.48 * m.length || cov < 12) continue;
     // Bentuk harus di dalam lingkaran dan mengisinya cukup banyak.
     let inside = 0;
     for (let h = info.start[c], e = h + area; h < e; h++) {
@@ -1859,7 +1908,7 @@ function glowRings(lab, data, W, H, s, pal, comp, order) {
     }
     if (inside < 0.95 * area || area < 0.35 * Math.PI * fit.R * fit.R) continue;
     if (disks.some((d) => Math.hypot(d.cx - fit.cx, d.cy - fit.cy) < 0.5 * Math.max(d.R, fit.R))) continue;
-    disks.push({ cx: fit.cx, cy: fit.cy, R: fit.R, comp: c });
+    disks.push({ cx: fit.cx, cy: fit.cy, R: fit.R, comp: c, inl: +(inl / m.length).toFixed(2), cov });
   }
   const out = [];
   if (!disks.length) return out;
@@ -1962,40 +2011,177 @@ function glowRings(lab, data, W, H, s, pal, comp, order) {
     let RgI = NR - 1;
     for (let r = 0; r < NR; r++) if (!isNaN(Lr[r]) && Lr[r] - far < 0.12 * amp) { RgI = r; break; }
     const Rg = R0 + (RgI + 1) * dr;
-    out.push({ cx: d.cx, cy: d.cy, R: d.R, Rg });
-    // Tetapkan label: piksel langit di dalam batas cahaya.
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    out.push({ cx: d.cx, cy: d.cy, R: d.R, Rg, comp: d.comp });
+    // Langit tanpa cahaya per baris: profil tepat di luar jangkauan cahaya, di
+    // dua titik lingkaran yang sebaris (kiri & kanan); baris tanpa data diisi
+    // dari baris terdekat.
+    const rs = Math.min(NR - 1, RgI + 2), Rs = R0 + (rs + 0.5) * dr;
+    const sky = new Float32Array((y1 - y0 + 1) * 3), skyOk = new Uint8Array(y1 - y0 + 1);
+    for (let y = y0; y <= y1; y++) {
+      const dy = y + 0.5 - d.cy;
+      if (Math.abs(dy) >= Rs) continue;
+      const dxx = Math.sqrt(Rs * Rs - dy * dy);
+      let a0 = 0, a1 = 0, a2 = 0, n = 0;
+      for (const sx of [dxx, -dxx]) {
+        const t = Math.floor(((Math.atan2(dy, sx) + Math.PI) / (2 * Math.PI)) * NT) % NT, b = t * NR + rs;
+        if (!prof.Wt[b]) continue;
+        a0 += prof.P[b * 3]; a1 += prof.P[b * 3 + 1]; a2 += prof.P[b * 3 + 2]; n++;
+      }
+      if (n) { const k = (y - y0) * 3; sky[k] = a0 / n; sky[k + 1] = a1 / n; sky[k + 2] = a2 / n; skyOk[y - y0] = 1; }
+    }
+    let anySky = -1;
+    for (let k = 0; k < skyOk.length; k++) if (skyOk[k]) { anySky = k; break; }
+    if (anySky < 0) continue;
+    for (let k = 0, last = anySky; k < skyOk.length; k++) {
+      if (skyOk[k]) { last = k; continue; }
+      let nx = -1;
+      for (let q = k + 1; q < skyOk.length; q++) if (skyOk[q]) { nx = q; break; }
+      const src = nx >= 0 && (k - last > nx - k || !skyOk[last]) ? nx : last;
+      sky[k * 3] = sky[src * 3]; sky[k * 3 + 1] = sky[src * 3 + 1]; sky[k * 3 + 2] = sky[src * 3 + 2];
+    }
+    const skyRow = (y) => { const k = (Math.max(y0, Math.min(y1, y)) - y0) * 3; return [sky[k], sky[k + 1], sky[k + 2]]; };
+    // Warna cahaya G = profil tepat di tepi benda, dari separuh arah yang
+    // paling terang (arah yang tertutup gunung/awan tidak ikut).
+    const G = [0, 0, 0];
+    const rimY = [];
+    for (let t = 0; t < NT; t++) { const b = t * NR; if (prof.Wt[b]) rimY.push([0.299 * prof.P[b * 3] + 0.587 * prof.P[b * 3 + 1] + 0.114 * prof.P[b * 3 + 2], t]); }
+    if (rimY.length < 6) continue;
+    rimY.sort((p, q) => q[0] - p[0]);
+    const lit = new Uint8Array(NT);
+    let gn = 0;
+    for (let k = 0; k < Math.ceil(rimY.length / 2); k++) { const t = rimY[k][1], b = t * NR; G[0] += prof.P[b * 3]; G[1] += prof.P[b * 3 + 1]; G[2] += prof.P[b * 3 + 2]; gn++; }
+    G[0] /= gn; G[1] /= gn; G[2] /= gn;
+    // Arah yang tidak tertutup: warna tepi dekat G.
+    for (let t = 0; t < NT; t++) { const b = t * NR; if (prof.Wt[b] && Math.hypot(prof.P[b * 3] - G[0], prof.P[b * 3 + 1] - G[1], prof.P[b * 3 + 2] - G[2]) < 30) lit[t] = 1; }
+    // Kekuatan cahaya a(r): profil = langit + a·(G − langit), kuadrat terkecil
+    // per jarak, dihaluskan, tidak naik ke luar, 0 di luar jangkauan.
+    const aR = new Float64Array(NR);
+    for (let r = 0; r <= RgI && r < NR; r++) {
+      let num = 0, den = 0;
+      const rr = R0 + (r + 0.5) * dr;
+      for (let t = 0; t < NT; t++) {
+        const b = t * NR + r;
+        if (!prof.Wt[b] || !lit[t]) continue;
+        const ang = ((t + 0.5) / NT) * 2 * Math.PI - Math.PI;
+        const S = skyRow(Math.round(d.cy + rr * Math.sin(ang) - 0.5));
+        for (let c = 0; c < 3; c++) { const g = G[c] - S[c]; num += (prof.P[b * 3 + c] - S[c]) * g; den += g * g; }
+      }
+      aR[r] = den > 1 ? Math.max(0, Math.min(1, num / den)) : 0;
+    }
+    for (let it = 0; it < 2; it++) for (let r = 1; r < RgI; r++) aR[r] = (aR[r - 1] + 2 * aR[r] + aR[r + 1]) / 4;
+    for (let r = 1; r < NR; r++) aR[r] = r > RgI ? 0 : Math.min(aR[r], aR[r - 1]);
+    const aAt = (r) => { const f = (r - R0) / dr - 0.5; if (f <= 0) return aR[0]; const k = Math.floor(f); if (k >= NR - 1) return 0; return aR[k] + (aR[k + 1] - aR[k]) * (f - k); };
+    if (aR[0] < 0.15) continue;
+    // Jangkauan cahaya sebenarnya: sampai a(r) habis.
+    let lastA = 0;
+    for (let r = 0; r < NR; r++) if (aR[r] > 0.02) lastA = r;
+    const RgE = Math.min(Rg, R0 + (lastA + 3) * dr);
+    out[out.length - 1].Rg = RgE;
+    // Cahaya dikeluarkan dari langit (warna langit polos), piksel diberi warna
+    // palet terdekat; benda di depan (warna jauh dari model) tidak disentuh.
+    const gi = out.length - 1, flag = glowFlag;
+    // Hanya langit yang tersambung ke tepi benda bercahaya (tanpa melewati
+    // garis, benda gelap, atau warna yang tidak cocok) → lereng gunung yang
+    // kebetulan berwarna mirip tidak ikut.
+    const zx0 = Math.max(0, Math.floor(d.cx - RgE)), zx1 = Math.min(W - 1, Math.ceil(d.cx + RgE));
+    const zy0 = Math.max(0, Math.floor(d.cy - RgE)), zy1 = Math.min(H - 1, Math.ceil(d.cy + RgE));
+    const ok = (x, y) => {
       const dx = x + 0.5 - d.cx, dy = y + 0.5 - d.cy, r = Math.hypot(dx, dy);
-      if (r < R0 || r >= Rg) continue;
+      if (r < R0 || r >= RgE) return false;
       const i = y * W + x, p = i * 4;
-      if (lab[i] >= HW || comp[i] === d.comp) continue;
-      // Interpolasi profil (sudut melingkar, jarak linear).
-      const ft = ((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * NT - 0.5, fr = (r - R0) / dr - 0.5;
-      const t0 = Math.floor(ft), tt = ft - t0, r0 = Math.max(0, Math.min(NR - 1, Math.floor(fr))), r1 = Math.min(NR - 1, r0 + 1), tr = Math.max(0, Math.min(1, fr - r0));
-      let a0 = 0, a1 = 0, a2 = 0, w = 0;
-      for (const [tq, wt0] of [[t0, 1 - tt], [t0 + 1, tt]]) {
-        const tb = ((tq % NT) + NT) % NT;
-        for (const [rq, wt1] of [[r0, 1 - tr], [r1, tr]]) {
-          const b = tb * NR + rq, wt = wt0 * wt1;
-          if (!prof.Wt[b] || wt <= 0) continue;
-          a0 += wt * prof.P[b * 3]; a1 += wt * prof.P[b * 3 + 1]; a2 += wt * prof.P[b * 3 + 2]; w += wt;
+      if (lab[i] >= HW || comp[i] === d.comp || flag[i] || (wall && wall[i])) return false;
+      if (disks.some((o2) => o2 !== d && Math.hypot(x + 0.5 - o2.cx, y + 0.5 - o2.cy) < o2.R + 2 * s)) return false;
+      const S = skyRow(y), a = aAt(r);
+      const m0 = S[0] + a * (G[0] - S[0]), m1 = S[1] + a * (G[1] - S[1]), m2 = S[2] + a * (G[2] - S[2]);
+      // Dekat tepi benda cahayanya lebih bervariasi → toleransi lebih longgar;
+      // benda gelap (garis, gunung) tetap tertahan: tidak boleh jauh lebih gelap.
+      const yp = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2], ym = 0.299 * m0 + 0.587 * m1 + 0.114 * m2;
+      return yp > ym - 28 && Math.hypot(data[p] - m0, data[p + 1] - m1, data[p + 2] - m2) <= 30 + 35 * a;
+    };
+    const mark = new Uint8Array((zx1 - zx0 + 1) * (zy1 - zy0 + 1));
+    const mi = (x, y) => (y - zy0) * (zx1 - zx0 + 1) + (x - zx0);
+    let q = [];
+    for (let t = 0; t < NT; t++) {
+      if (!lit[t]) continue;
+      const ang = ((t + 0.5) / NT) * 2 * Math.PI - Math.PI;
+      for (let rr2 = R0; rr2 < R0 + 4 * s; rr2 += 1) {
+        const x = Math.floor(d.cx + rr2 * Math.cos(ang)), y = Math.floor(d.cy + rr2 * Math.sin(ang));
+        if (x < zx0 || y < zy0 || x > zx1 || y > zy1 || mark[mi(x, y)] || !ok(x, y)) continue;
+        mark[mi(x, y)] = 1; q.push(x, y);
+      }
+    }
+    while (q.length) {
+      const nq = [];
+      for (let k = 0; k < q.length; k += 2) {
+        const x = q[k], y = q[k + 1];
+        for (const [xx, yy] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+          if (xx < zx0 || yy < zy0 || xx > zx1 || yy > zy1 || mark[mi(xx, yy)]) continue;
+          mark[mi(xx, yy)] = 2;
+          if (!ok(xx, yy)) continue;
+          mark[mi(xx, yy)] = 1; nq.push(xx, yy);
         }
       }
-      if (!w) continue;
-      a0 /= w; a1 /= w; a2 /= w;
-      if (Math.hypot(data[p] - a0, data[p + 1] - a1, data[p + 2] - a2) > 25) continue; // benda di depan
-      if (disks.some((o2) => o2 !== d && Math.hypot(x + 0.5 - o2.cx, y + 0.5 - o2.cy) < o2.R + 2 * s)) continue;
-      // Hanya bentuk batas pita yang berubah: warna baru harus hampir sama
-      // cocoknya dengan warna piksel seperti warna lamanya.
-      const k = nearestPal(clamp255(a0), clamp255(a1), clamp255(a2)), old = lab[i];
-      if (k === old) continue;
-      rgb2lab(data[p], data[p + 1], data[p + 2], tmpLab);
-      const dk = Math.hypot(pal[k].L - tmpLab[0], pal[k].A - tmpLab[1], pal[k].B - tmpLab[2]);
-      const dold = Math.hypot(pal[old].L - tmpLab[0], pal[old].A - tmpLab[1], pal[old].B - tmpLab[2]);
-      if (dk <= dold + 6) lab[i] = k;
+      q = nq;
     }
+    for (let y = zy0; y <= zy1; y++) {
+      const S = skyRow(y);
+      for (let x = zx0; x <= zx1; x++) {
+        if (mark[mi(x, y)] !== 1) continue;
+        // Langit di balik cahaya = langit baris itu + sedikit sisa (selisih
+        // model diredam) → pita langit mendatar tanpa bercak sisa cahaya.
+        const i = y * W + x, p = i * 4, a = aAt(Math.hypot(x + 0.5 - d.cx, y + 0.5 - d.cy));
+        for (let c = 0; c < 3; c++) data[p + c] = clamp255(S[c] + 0.25 * (data[p + c] - (S[c] + a * (G[c] - S[c]))));
+        lab[i] = nearestPal(data[p], data[p + 1], data[p + 2]);
+        flag[i] = gi + 1;
+      }
+    }
+    // Lingkaran cahaya: K tingkat (makin luar makin redup). Batas tingkat di
+    // jarak tempat a(r) turun ke (k − ½)/K · a(tepi); kekuatan tiap tingkat =
+    // rata-rata a(r) di cincinnya; opasitas lingkaran bertumpuk diturunkan dari situ.
+    const K = Math.max(3, Math.min(6, Math.round(aR[0] * 8)));
+    const radii = [];
+    for (let k = 1; k <= K; k++) {
+      const lvl = (aR[0] * (k - 0.5)) / K;
+      let rq = RgI;
+      for (let r = 0; r <= RgI; r++) if (aR[r] < lvl) { rq = r; break; }
+      radii.push(R0 + (rq + 0.5) * dr);
+    }
+    radii.sort((p, q) => q - p);
+    const levels = [];
+    let prevA = 0;
+    for (let k = 0; k < radii.length; k++) {
+      const ro = radii[k], ri = k + 1 < radii.length ? radii[k + 1] : d.R;
+      if (ro - ri < 1.5 * s && k + 1 < radii.length) continue;
+      let sum = 0, n = 0;
+      for (let r = ri; r < ro; r += dr * 0.5) { sum += aAt(Math.max(r, R0)); n++; }
+      const A = Math.min(0.97, Math.max(prevA + 0.01, n ? sum / n : 0));
+      const op = 1 - (1 - A) / (1 - prevA);
+      levels.push([ro, op]);
+      prevA = A;
+    }
+    out[gi].G = G.map((v) => Math.round(clamp255(v)));
+    out[gi].levels = levels;
   }
   return out;
+}
+
+// Komponen langit per cahaya: piksel bertanda >= 50 % dari piksel komponen
+// yang berada di dalam lingkaran jangkauan cahaya, minimal 4 piksel.
+function glowSkyComps(glows, flag, comp, n, W, H) {
+  return glows.map((g, gi) => {
+    const inZ = new Map(), fl = new Map();
+    const x0 = Math.max(0, Math.floor(g.cx - g.Rg)), x1 = Math.min(W - 1, Math.ceil(g.cx + g.Rg));
+    const y0 = Math.max(0, Math.floor(g.cy - g.Rg)), y1 = Math.min(H - 1, Math.ceil(g.cy + g.Rg));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (Math.hypot(x + 0.5 - g.cx, y + 0.5 - g.cy) >= g.Rg) continue;
+      const i = y * W + x, c = comp[i];
+      inZ.set(c, (inZ.get(c) || 0) + 1);
+      if (flag[i] === gi + 1) fl.set(c, (fl.get(c) || 0) + 1);
+    }
+    const res = [];
+    for (const [c, k] of fl) if (k >= 4 && k >= 0.5 * inZ.get(c)) res.push(c);
+    return res;
+  });
 }
 
 // Lingkaran melalui tiga titik.

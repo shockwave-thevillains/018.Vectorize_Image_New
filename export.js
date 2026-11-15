@@ -316,6 +316,52 @@ function linesEPS(res, kx, ky, OH) {
   return L;
 }
 
+// Cahaya bulan/matahari (mode Gradien): lingkaran sepusat bertumpuk, makin luar
+// makin transparan, hanya di bentuk langit (clip) → awan, gunung, dan benda
+// bercahaya itu sendiri tidak ikut terwarnai.
+let glowSeq = 0;
+const glowTag = Math.random().toString(36).slice(2, 7);
+function glowSVG(res, opt, kx, ky, hidden) {
+  if (!res.glows || !res.glows.length) return '';
+  const out = [];
+  for (const g of res.glows) {
+    const regs = g.regions.filter((r) => !hidden[r] && !(opt.absorbed && opt.absorbed[r]));
+    if (!regs.length) continue;
+    const id = `vg${glowTag}${++glowSeq}`;
+    const d = [];
+    for (const r of regs) { const sk = svgSink(kx, ky); for (const sb of res.regions[r].subs) walk(sb.refs, res.chains, sk, true); d.push(sk.text()); }
+    const col = hex(g.G);
+    out.push(`<clipPath id="${id}"><path clip-rule="evenodd" d="${d.join('')}"/></clipPath><g clip-path="url(#${id})" fill="${col}">`);
+    for (const [r, op] of g.levels) out.push(`<circle cx="${num(g.cx * kx)}" cy="${num(g.cy * ky)}" r="${num(r * kx)}" fill-opacity="${num(op)}"/>`);
+    out.push('</g>');
+  }
+  return out.join('');
+}
+// EPS (tanpa transparansi): per bentuk langit, lingkaran diisi warna hasil
+// campuran warna bentuk itu dengan cahaya, dipotong ke bentuknya.
+function glowEPS(res, opt, kx, ky, OH, hidden, colorOf) {
+  const L = [];
+  if (!res.glows || !res.glows.length) return L;
+  for (const g of res.glows) {
+    for (const r of g.regions) {
+      if (hidden[r] || (opt.absorbed && opt.absorbed[r])) continue;
+      L.push('gsave newpath');
+      const sk = epsSink(kx, ky, OH);
+      for (const sb of res.regions[r].subs) walk(sb.refs, res.chains, sk, true);
+      sk.end();
+      L.push(...sk.out);
+      L.push('eoclip');
+      let c = colorOf(r).slice();
+      for (const [rad, op] of g.levels) {
+        c = c.map((v, k) => v * (1 - op) + g.G[k] * op);
+        L.push(`${c.map((v) => num(v / 255)).join(' ')} rg newpath ${num(g.cx * kx)} ${num(OH - g.cy * ky)} ${num(rad * kx)} 0 360 arc closepath fill`);
+      }
+      L.push('grestore');
+    }
+  }
+  return L;
+}
+
 // Lebar garis pengisi celah dalam px output: minimal opt.gapWidth, ikut membesar
 // pada artboard besar agar tetap menutup celah saat dilihat diperkecil.
 const gapWidthFor = (opt, OW, res) => Math.max(opt.gapWidth || 1, (2.5 * OW) / res.srcW);
@@ -347,6 +393,8 @@ export function buildSVG(res, opt) {
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${gw}" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
+  const gl = glowSVG(res, opt, kx, ky, hidden);
+  if (gl) parts.push(gl);
   const ls = linesSVG(res, kx, ky);
   if (ls) parts.push(ls);
   parts.push('</svg>');
@@ -397,6 +445,10 @@ export function buildEPS(res, opt, title) {
       }
     }
   }
+  {
+    const pal = res.palette.map((c, k) => (opt.recolor && opt.recolor[k]) || c);
+    L.push(...glowEPS(res, opt, kx, ky, OH, hidden, (i) => (opt.regionColor && opt.regionColor[i]) || pal[res.regions[i].k]));
+  }
   L.push(...linesEPS(res, kx, ky, OH));
   L.push('grestore');
   L.push('showpage');
@@ -425,7 +477,7 @@ export function previewMarkup(res, opt) {
       if (d.length) parts.push(`<path fill="none" stroke="${c}" stroke-width="${sw}" vector-effect="non-scaling-stroke" stroke-linejoin="round" d="${d.join('')}"/>`);
     }
   }
-  return parts.join('') + linesSVG(res, 1, 1);
+  return parts.join('') + glowSVG(res, opt, 1, 1, hidden) + linesSVG(res, 1, 1);
 }
 
 export function outlineMarkup(res, hidden) {
