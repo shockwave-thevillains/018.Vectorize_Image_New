@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="id">
+<html lang="id" class="locked">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,9 +10,22 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; if (localStorage.getItem('vektor.panel') === 'hidden') document.documentElement.classList.add('panel-off'); } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611150618">
+  <link rel="stylesheet" href="styles.css?v=202611150620">
 </head>
 <body>
+  <div class="gate" id="gate">
+    <form class="gate-box" id="gateForm" autocomplete="off">
+      <div class="gate-brand">
+        <svg viewBox="0 0 40 24" aria-hidden="true"><path d="M4 20C9 4 31 4 36 20" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20 11 6M36 20 29 6" stroke="currentColor" stroke-width="1"/><rect x="2" y="18" width="4" height="4" fill="var(--accent)"/><rect x="34" y="18" width="4" height="4" fill="var(--accent)"/><circle cx="11" cy="6" r="1.8" fill="currentColor"/><circle cx="29" cy="6" r="1.8" fill="currentColor"/></svg>
+        <span>Vektor</span>
+      </div>
+      <label for="gatePw">Kata sandi</label>
+      <input id="gatePw" type="password" inputmode="text" autocomplete="current-password" required>
+      <button class="btn primary" id="gateBtn" type="submit">Masuk</button>
+      <p class="gate-msg" id="gateMsg" aria-live="polite"></p>
+      <noscript><p class="gate-msg err">Aktifkan JavaScript untuk memakai Vektor.</p></noscript>
+    </form>
+  </div>
   <header class="top">
     <a class="brand" href="./" aria-label="Vektor">
       <svg viewBox="0 0 40 24" aria-hidden="true"><path d="M4 20C9 4 31 4 36 20" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20 11 6M36 20 29 6" stroke="currentColor" stroke-width="1"/><rect x="2" y="18" width="4" height="4" fill="var(--accent)"/><rect x="34" y="18" width="4" height="4" fill="var(--accent)"/><circle cx="11" cy="6" r="1.8" fill="currentColor"/><circle cx="29" cy="6" r="1.8" fill="currentColor"/></svg>
@@ -313,6 +326,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="app.js?v=202611150618"></script>
+  <script type="module" src="gate.js?v=202611150620"></script>
 </body>
 </html>

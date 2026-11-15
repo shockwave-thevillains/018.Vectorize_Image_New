@@ -36,6 +36,7 @@ jadi bisa di-host gratis di GitHub Pages.
 - **Tema terang/gelap**: tombol di kanan atas (otomatis → terang → gelap), tersimpan di browser.
 - **Sembunyikan panel pengaturan**: tombol panel di kanan atas (atau tombol **P**) menyembunyikan/menampilkan sidebar kanan agar area gambar selebar layar; pilihan tersimpan di browser.
 - **Pratinjau hasil di antrean**: setelah berhasil diproses, tiap baris antrean menampilkan gambar kecil hasil vektornya (ikut berubah saat diedit).
+- **Kata sandi**: aplikasi baru bisa dipakai setelah kata sandi benar, diminta setiap kali laman dibuka. Kata sandi tidak disimpan di kode; yang disimpan hanya hash bertingkat (SHA-512 bergaram → PBKDF2-HMAC-SHA-512 600.000 putaran bergaram → SHA-256) di `gate.js`. Salah memasukkan menambah jeda (1, 2, 4 … maks. 30 dtk). Mengganti kata sandi: jalankan skrip pembuat hash lalu ganti konstanta `S1`, `S2`, `HASH` di `gate.js`.
 - **Bantuan (?)**: arahkan kursor ke ikon tanda tanya di samping pengaturan untuk penjelasan nilai kecil vs besar.
 - **Default**: tombol di atas panel mengembalikan semua pengaturan ke nilai bawaan (kode nama file dan nomor mulai tidak diubah).
 - **Kode nama file** ada di urutan pertama panel agar tidak lupa diganti.
