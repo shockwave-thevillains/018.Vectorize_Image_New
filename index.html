@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; if (localStorage.getItem('vektor.panel') === 'hidden') document.documentElement.classList.add('panel-off'); } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611150620">
+  <link rel="stylesheet" href="styles.css?v=202611150757">
 </head>
 <body>
   <div class="gate" id="gate">
@@ -150,6 +150,8 @@
             <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
             <div class="scale mono"><span>ringan</span><span>detail</span></div>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Garis setipis ≤ 3 px dikenali dan dibuat sebagai garis (stroke) bertebal seragam, bukan isian.</small></span></label>
+            <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="glowRings"><span><b>Cahaya bulat → cincin</b><small>Bulan, matahari, atau lampu bulat (juga yang tertutup sebagian, mis. setengah di balik gunung) dideteksi; cahaya di sekitarnya dibuat cincin sepusat yang makin redup ke luar. Benda di depannya tidak diubah.</small></span></label>
+            <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="arcSnap"><span><b>Lingkaran &amp; busur sempurna</b><small>Tepi yang hampir lingkaran/busur dijadikan lingkaran/busur sempurna. Matikan bila bentuk bulat di gambar memang tidak sempurna.</small></span></label>
             <p class="note">Untuk gambar penuh gradasi/cahaya. Gradasi dibentuk dari banyak tingkat warna (seperti vectorizer.ai).</p>
           </div>
           <div class="field" data-show="silhouette">
@@ -326,6 +328,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="gate.js?v=202611150620"></script>
+  <script type="module" src="gate.js?v=202611150757"></script>
 </body>
 </html>

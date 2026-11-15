@@ -1,10 +1,12 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150620';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611150757';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
   mode: 'color',
   gradColors: 64,
   lineStrokes: true,
+  glowRings: true,
+  arcSnap: true,
   clean: true,
   rough: 2,
   straighten: true,
@@ -43,7 +45,7 @@ const modeDefault = (mode, k) => (MODE_DEFAULTS[mode] && k in MODE_DEFAULTS[mode
 function applyModeDefaults(prev, next) {
   for (const k of Object.keys(OTHER_DEFAULTS)) if (S[k] === modeDefault(prev, k)) S[k] = modeDefault(next, k);
 }
-const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'glowRings', 'arcSnap', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -94,6 +96,8 @@ function procOpts() {
     mode: S.mode,
     gradColors: S.gradColors,
     lineStrokes: S.lineStrokes,
+    glowRings: S.glowRings,
+    arcSnap: S.arcSnap,
     clean: S.clean,
     rough: S.rough,
     straighten: S.mode === 'color' && !!S.straighten,
@@ -203,7 +207,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611150620');
+  const w = new Worker('worker.js?v=202611150757');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -223,7 +227,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611150620', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611150757', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {

@@ -87,6 +87,7 @@ async function vectorize(file, o, progress, aiMask) {
   // Gradien: garis tipis dideteksi dulu, dihapus dari gambar (diisi warna
   // latarnya), lalu digambar ulang sebagai garis vektor bertebal seragam.
   let thinLines = o.mode === 'gradient' && o.lineStrokes !== false ? detectLines(src, sw, sh) : [];
+  let flatEdge = null;
   if (thinLines.length) g0.putImageData(new ImageData(src, sw, sh), 0, 0);
   if (o.mode === 'gradient') {
     // Detail kecil yang kontras (garis tipis, titik, huruf) dilindungi: bobotnya
@@ -103,7 +104,7 @@ async function vectorize(file, o, progress, aiMask) {
     // Bidang landai (langit, cahaya bulan/matahari): grain dihaluskan isotropik
     // berjangkauan jauh di resolusi rendah → kontur pita warna bulat & mulus,
     // bukan kotak bergerigi. Tepi/garis kontras tidak tersentuh.
-    if (o.flatSmooth !== false) smoothFlat(src, sw, sh, ...(o._fs || []));
+    if (o.flatSmooth !== false) flatEdge = smoothFlat(src, sw, sh, ...(o._fs || []));
     for (let i = 0, p = 0; i < keep.length; i++, p += 4) {
       const m = keep[i];
       if (!m) continue;
@@ -160,11 +161,15 @@ async function vectorize(file, o, progress, aiMask) {
 
   // Penghalusan searah garis pada resolusi sumber, lalu upscale dari hasilnya.
   if (o.flow !== false) {
+    const pre = flatEdge ? new Uint8ClampedArray(src) : null;
     flowSmooth(src, sw, sh, Math.max(2, Math.round(1.5 + 2.5 * o.smooth)));
     // Gradien: garis tipis diratakan lebih panjang searah garis (kecerahan &
     // tebal seragam, tidak putus); hanya piksel dengan arah yang sangat jelas.
     if (o.mode === 'gradient') {
       flowSmooth(src, sw, sh, 7, 0.7, 120);
+      // Bidang landai yang sudah dihaluskan tidak ikut diratakan searah "garis"
+      // (arah semu di langit membuat pita bergaris/berlidah api).
+      if (pre) restoreFlat(src, pre, flatEdge, sw, sh, 2);
       o._orient = orientField(src, sw, sh);
     }
     g0.putImageData(new ImageData(src, sw, sh), 0, 0);
@@ -196,6 +201,9 @@ async function vectorize(file, o, progress, aiMask) {
 
   const order = new Int32Array(N);
   const comp = new Int32Array(N);
+  // Gradien: cahaya di sekitar benda terang yang bulat (bulan, matahari) dibuat
+  // menjadi cincin sepusat yang makin redup ke luar.
+  if (o.mode === 'gradient' && o.glowRings !== false) o = { ...o, _glow: glowRings(lab, data, W, H, s, pal, comp, order) };
   // Gradien: noise JPEG antar tingkat warna yang berdekatan dibuang lebih tegas.
   const minA = Math.max(1, Math.round(o.minArea * (o.mode === 'gradient' ? 3 : clean ? 2.5 : 1) * s * s));
   // Gradien / Rapikan: bintik kecil yang kontras (titik grid, bintang, butir nasi)
@@ -1357,81 +1365,91 @@ function domainTransform(px, w, h, ss, sr, iters) {
 // di-bilateral beberapa kali (jangkauan efektif ss·f px, hanya antar warna
 // mirip), diperbesar bilinear, lalu dicampur ke gambar hanya di piksel yang
 // selisihnya kecil (bidang landai); di dekat tepi/garis gambar asli dipakai.
-function smoothFlat(px, w, h, f = 0, ss = 2.5, sr = 9, iters = 3, E = 14) {
+function smoothFlat(px, w, h, f = 0, ss = 2.5, sr = 9, iters = 3, E = 24, rr = 14) {
   if (!f) f = Math.max(2, Math.round(Math.min(w, h) / 180));
   const N = w * h;
-  // Peta tepi dari gambar yang diburamkan (grain hilang, tepi nyata tetap ada).
-  const bl = new Float32Array(N * 3);
-  for (let i = 0, p = 0; i < N; i++, p += 4) { bl[i * 3] = px[p]; bl[i * 3 + 1] = px[p + 1]; bl[i * 3 + 2] = px[p + 2]; }
+  // Gambar diburamkan ringan (kotak 3×3 dua kali): grain teredam, garis tipis tetap.
+  const g = new Float32Array(N * 3);
+  for (let i = 0, p = 0; i < N; i++, p += 4) { g[i * 3] = px[p]; g[i * 3 + 1] = px[p + 1]; g[i * 3 + 2] = px[p + 2]; }
   const tmp = new Float32Array(N * 3);
-  const R = Math.max(1, Math.round(f / 2));
   for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      for (let c = 0; c < 3; c++) { let a = 0, n = 0; for (let d = -R; d <= R; d++) { const xx = x + d; if (xx < 0 || xx >= w) continue; a += bl[(y * w + xx) * 3 + c]; n++; } tmp[(y * w + x) * 3 + c] = a / n; }
+      const x0 = Math.max(0, x - 1), x1 = Math.min(w - 1, x + 1);
+      for (let c = 0; c < 3; c++) { let a = 0; for (let xx = x0; xx <= x1; xx++) a += g[(y * w + xx) * 3 + c]; tmp[(y * w + x) * 3 + c] = a / (x1 - x0 + 1); }
     }
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      for (let c = 0; c < 3; c++) { let a = 0, n = 0; for (let d = -R; d <= R; d++) { const yy = y + d; if (yy < 0 || yy >= h) continue; a += tmp[(yy * w + x) * 3 + c]; n++; } bl[(y * w + x) * 3 + c] = a / n; }
+      const y0 = Math.max(0, y - 1), y1 = Math.min(h - 1, y + 1);
+      for (let c = 0; c < 3; c++) { let a = 0; for (let yy = y0; yy <= y1; yy++) a += tmp[(yy * w + x) * 3 + c]; g[(y * w + x) * 3 + c] = a / (y1 - y0 + 1); }
     }
   }
+  // Tepi: selisih tengah besar pada gambar buram (garis, tepi bulan, kawah).
   const edge = new Uint8Array(N);
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const i = y * w + x;
-    let g = 0;
-    for (let c = 0; c < 3; c++) g += Math.abs(bl[(i + 1) * 3 + c] - bl[(i - 1) * 3 + c]) + Math.abs(bl[(i + w) * 3 + c] - bl[(i - w) * 3 + c]);
-    if (g > E) edge[i] = 1;
+    let d = 0;
+    for (let c = 0; c < 3; c++) d += Math.abs(g[(i + 1) * 3 + c] - g[(i - 1) * 3 + c]) + Math.abs(g[(i + w) * 3 + c] - g[(i - w) * 3 + c]);
+    if (d > E) edge[i] = 1;
   }
   for (let i = 0, p = 3; i < N; i++, p += 4) if (px[p] < 255) edge[i] = 1;
-  // Jarak (catur) ke tepi terdekat: bobot halus 0 di tepi → 1 di jarak >= D.
-  const D = f + 2;
-  const dist = new Uint8Array(N).fill(255);
-  let cur = [];
-  for (let i = 0; i < N; i++) if (edge[i]) { dist[i] = 0; cur.push(i); }
-  for (let d = 1; d <= D && cur.length; d++) {
-    const nx = [];
-    for (const i of cur) {
-      const x = i % w, y = (i / w) | 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-        const q = yy * w + xx;
-        if (dist[q] > d) { dist[q] = d; nx.push(q); }
-      }
-    }
-    cur = nx;
-  }
+  const edgeOut = Uint8Array.from(edge);
+  // Resolusi rendah: rata-rata sel tanpa piksel tepi (warna dua sisi tidak tercampur).
   const lw = Math.max(1, Math.ceil(w / f)), lh = Math.max(1, Math.ceil(h / f));
   const lo = new Uint8ClampedArray(lw * lh * 4);
   for (let y = 0; y < lh; y++) {
     for (let x = 0; x < lw; x++) {
-      let r = 0, g = 0, b = 0, n = 0;
+      let r = 0, gg = 0, b = 0, n = 0;
       for (let yy = y * f; yy < Math.min(h, y * f + f); yy++) {
         for (let xx = x * f; xx < Math.min(w, x * f + f); xx++) {
-          const p = (yy * w + xx) * 4;
-          if (px[p + 3] < 255) continue;
-          r += px[p]; g += px[p + 1]; b += px[p + 2]; n++;
+          const i = yy * w + xx;
+          if (edge[i]) continue;
+          r += g[i * 3]; gg += g[i * 3 + 1]; b += g[i * 3 + 2]; n++;
         }
       }
       const q = (y * lw + x) * 4;
-      if (n) { lo[q] = r / n; lo[q + 1] = g / n; lo[q + 2] = b / n; lo[q + 3] = 255; }
+      if (n * 3 >= f * f) { lo[q] = r / n; lo[q + 1] = gg / n; lo[q + 2] = b / n; lo[q + 3] = 255; }
     }
   }
   const r = Math.max(2, Math.ceil(ss * 1.8));
   for (let k = 0; k < iters; k++) bilateral(lo, lw, lh, r, ss, sr);
+  // Pembesaran sadar-tepi (joint bilateral): sel rendah di sekitar piksel diberi
+  // bobot jarak × kemiripan warna dengan piksel buramnya → di dekat tepi bulan,
+  // halo hanya mengambil warna halo.
+  const K = 2, sig2 = 2 * (0.8 * f) ** 2, rr2 = 2 * rr * rr;
   for (let y = 0; y < h; y++) {
-    const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5)), y0 = Math.floor(fy), y1 = Math.min(lh - 1, y0 + 1), ty = fy - y0;
+    const fy = (y + 0.5) / f - 0.5, cy = Math.round(fy);
     for (let x = 0; x < w; x++) {
       const i = y * w + x, p = i * 4;
-      const wgt = Math.min(1, dist[i] / D);
-      if (!wgt) continue;
-      const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5)), x0 = Math.floor(fx), x1 = Math.min(lw - 1, x0 + 1), tx = fx - x0;
-      const a = (y0 * lw + x0) * 4, b = (y0 * lw + x1) * 4, c = (y1 * lw + x0) * 4, d = (y1 * lw + x1) * 4;
-      if (lo[a + 3] < 255 || lo[b + 3] < 255 || lo[c + 3] < 255 || lo[d + 3] < 255) continue;
-      for (let ch = 0; ch < 3; ch++) {
-        const v = (lo[a + ch] * (1 - tx) + lo[b + ch] * tx) * (1 - ty) + (lo[c + ch] * (1 - tx) + lo[d + ch] * tx) * ty;
-        px[p + ch] += wgt * (v - px[p + ch]);
+      if (edge[i] || px[p + 3] < 255) continue;
+      const fx = (x + 0.5) / f - 0.5, cx = Math.round(fx);
+      const g0 = g[i * 3], g1 = g[i * 3 + 1], g2 = g[i * 3 + 2];
+      let a0 = 0, a1 = 0, a2 = 0, ws = 0;
+      for (let yy = cy - K; yy <= cy + K; yy++) {
+        if (yy < 0 || yy >= lh) continue;
+        for (let xx = cx - K; xx <= cx + K; xx++) {
+          if (xx < 0 || xx >= lw) continue;
+          const q = (yy * lw + xx) * 4;
+          if (lo[q + 3] < 255) continue;
+          const dx = (xx - fx) * f, dy = (yy - fy) * f;
+          const d0 = lo[q] - g0, d1 = lo[q + 1] - g1, d2 = lo[q + 2] - g2;
+          const wt = Math.exp(-(dx * dx + dy * dy) / sig2 - (d0 * d0 + d1 * d1 + d2 * d2) / rr2);
+          a0 += wt * lo[q]; a1 += wt * lo[q + 1]; a2 += wt * lo[q + 2]; ws += wt;
+        }
       }
+      if (ws < 1e-4) continue;
+      px[p] = a0 / ws; px[p + 1] = a1 / ws; px[p + 2] = a2 / ws;
     }
   }
+  return edgeOut;
+}
+
+// Kembalikan piksel yang jauh (> r px) dari tepi ke nilai sebelum diratakan.
+function restoreFlat(px, pre, edge, w, h, r) {
+  const N = w * h, near = new Uint8Array(N);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (!edge[y * w + x]) continue;
+    for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) near[yy * w + xx] = 1;
+  }
+  for (let i = 0, p = 0; i < N; i++, p += 4) if (!near[i]) { px[p] = pre[p]; px[p + 1] = pre[p + 1]; px[p + 2] = pre[p + 2]; }
 }
 
 function bilateral(px, w, h, r, ss, sr) {
@@ -1764,6 +1782,250 @@ function boxBlur(A, w, h, r) {
 // ---------------------------------------------------------------- komponen
 // Pelabelan komponen 4-tetangga. `order` dipakai sebagai antrean BFS sekaligus
 // daftar piksel per komponen.
+// Deteksi lingkaran terang + cincin cahaya.
+// 1. Bentuk berwarna terang (L >= 60) yang tepinya cocok dengan lingkaran
+//    (inlier >= 55 %, sebaran sudut inlier >= 120°, isi >= 35 % lingkaran,
+//    jari-jari 1,5–25 % sisi pendek gambar) = sumber cahaya.
+// 2. Profil warna langit per (sudut, jarak) di sekitarnya dirata-ratakan
+//    (dua lintasan: piksel yang jauh dari profil — awan, gunung — diabaikan) dan
+//    dihaluskan searah sudut dan jarak; batas cahaya = jarak tempat kecerahan
+//    rata-rata sudah hampir sama dengan langit jauh.
+// 3. Piksel langit di dalam batas cahaya diberi warna palet terdekat dari
+//    profil pada jarak & sudutnya → batas pita berupa busur sepusat. Benda di
+//    depan (warna jauh dari profil) tidak diubah.
+function glowRings(lab, data, W, H, s, pal, comp, order) {
+  const info = label(lab, W, H, comp, order);
+  const minDim = Math.min(W, H);
+  const disks = [];
+  for (let c = 0; c < info.count; c++) {
+    const l = info.lbl[c];
+    if (l >= HW || pal[l].L < 60) continue;
+    const area = info.size[c];
+    const rMin = 0.035 * minDim, rMax = 0.25 * minDim;
+    if (area < 0.35 * Math.PI * rMin * rMin || area > Math.PI * rMax * rMax) continue;
+    // Kontur luar: untuk tiap arah (180) dari titik berat, titik tepi terjauh
+    // (lubang di dalam — kawah — tidak ikut).
+    let gx = 0, gy = 0;
+    for (let h = info.start[c], e = h + area; h < e; h++) { const i = order[h]; gx += i % W; gy += (i / W) | 0; }
+    gx = gx / area + 0.5; gy = gy / area + 0.5;
+    const NA = 180, far = new Float64Array(NA).fill(-1), fx = new Float64Array(NA), fy = new Float64Array(NA);
+    for (let h = info.start[c], e = h + area; h < e; h++) {
+      const i = order[h], x = i % W, y = (i / W) | 0;
+      if (!((x > 0 && comp[i - 1] !== c) || (x < W - 1 && comp[i + 1] !== c) || (y > 0 && comp[i - W] !== c) || (y < H - 1 && comp[i + W] !== c))) continue;
+      const dx = x + 0.5 - gx, dy = y + 0.5 - gy, dd = dx * dx + dy * dy;
+      const a = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * NA) % NA;
+      if (dd > far[a]) { far[a] = dd; fx[a] = x + 0.5; fy[a] = y + 0.5; }
+    }
+    const B = [];
+    for (let a = 0; a < NA; a++) if (far[a] >= 0) B.push(fx[a], fy[a]);
+    if (B.length < 40) continue;
+    // RANSAC: lingkaran dari 3 titik acak, pilih yang didukung titik terbanyak,
+    // lalu pas ulang dengan pendukungnya. Tahan terhadap bagian yang tertutup
+    // benda lain (matahari di balik gunung) atau menyatu dengan cahaya.
+    const nb = B.length / 2;
+    const inliers = (f) => {
+      const tol = Math.max(1.5 * s, 0.03 * f.R);
+      const m = new Uint8Array(nb);
+      let k2 = 0;
+      for (let k = 0; k < nb; k++) if (Math.abs(Math.hypot(B[k * 2] - f.cx, B[k * 2 + 1] - f.cy) - f.R) <= tol) { m[k] = 1; k2++; }
+      return { m, n: k2 };
+    };
+    let best = null;
+    let seed = (c * 2654435761) >>> 0;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    for (let it = 0; it < 400; it++) {
+      const a = Math.floor(rnd() * nb), b = Math.floor(rnd() * nb), e = Math.floor(rnd() * nb);
+      if (a === b || b === e || a === e) continue;
+      const f = circle3(B[a * 2], B[a * 2 + 1], B[b * 2], B[b * 2 + 1], B[e * 2], B[e * 2 + 1]);
+      if (!f || f.R < rMin || f.R > rMax) continue;
+      const q = inliers(f);
+      if (!best || q.n > best.n) best = { f, n: q.n, m: q.m };
+    }
+    let fit = best ? circleFit(B, best.m) : null;
+    if (fit) fit.m = inliers(fit).m;
+    if (!fit || !fit.m || fit.R < rMin || fit.R > rMax) continue;
+    const m = fit.m;
+    let inl = 0;
+    const bins = new Uint8Array(36);
+    for (let k = 0; k < m.length; k++) if (m[k]) { inl++; bins[Math.floor(((Math.atan2(B[k * 2 + 1] - fit.cy, B[k * 2] - fit.cx) + Math.PI) / (2 * Math.PI)) * 36) % 36] = 1; }
+    let cov = 0;
+    for (const b of bins) cov += b;
+    if (inl < 0.4 * m.length || cov < 12) continue;
+    // Bentuk harus di dalam lingkaran dan mengisinya cukup banyak.
+    let inside = 0;
+    for (let h = info.start[c], e = h + area; h < e; h++) {
+      const i = order[h];
+      if (Math.hypot((i % W) + 0.5 - fit.cx, ((i / W) | 0) + 0.5 - fit.cy) <= fit.R + 2 * s) inside++;
+    }
+    if (inside < 0.95 * area || area < 0.35 * Math.PI * fit.R * fit.R) continue;
+    if (disks.some((d) => Math.hypot(d.cx - fit.cx, d.cy - fit.cy) < 0.5 * Math.max(d.R, fit.R))) continue;
+    disks.push({ cx: fit.cx, cy: fit.cy, R: fit.R, comp: c });
+  }
+  const out = [];
+  if (!disks.length) return out;
+
+  const K = pal.length;
+  const cache = new Map();
+  const nearestPal = (r, g, b) => {
+    const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+    let v = cache.get(key);
+    if (v === undefined) {
+      rgb2lab(r, g, b, tmpLab);
+      let bd = Infinity;
+      v = 0;
+      for (let k = 0; k < K; k++) {
+        if (k === HW || k === T) continue;
+        const d = (pal[k].L - tmpLab[0]) ** 2 + (pal[k].A - tmpLab[1]) ** 2 + (pal[k].B - tmpLab[2]) ** 2;
+        if (d < bd) { bd = d; v = k; }
+      }
+      cache.set(key, v);
+    }
+    return v;
+  };
+
+  for (const d of disks) {
+    const R0 = d.R + 1.5 * s, Rout = Math.min(4 * d.R, 0.45 * Math.max(W, H));
+    const NT = 90, dr = Math.max(1, s), NR = Math.max(4, Math.ceil((Rout - R0) / dr));
+    const x0 = Math.max(0, Math.floor(d.cx - Rout)), x1 = Math.min(W - 1, Math.ceil(d.cx + Rout));
+    const y0 = Math.max(0, Math.floor(d.cy - Rout)), y1 = Math.min(H - 1, Math.ceil(d.cy + Rout));
+    const binOf = (x, y) => {
+      const dx = x + 0.5 - d.cx, dy = y + 0.5 - d.cy, r = Math.hypot(dx, dy);
+      if (r < R0 || r >= Rout) return -1;
+      const t = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * NT) % NT;
+      return t * NR + Math.min(NR - 1, Math.floor((r - R0) / dr));
+    };
+    // Profil: rata-rata per bin, dihaluskan sudut (σ 3 bin, melingkar) & jarak (σ 2 bin).
+    const smoothProf = (S, C) => {
+      const P = new Float32Array(NT * NR * 3), Wt = new Float32Array(NT * NR);
+      const kt = [], kr = [];
+      for (let q = -9; q <= 9; q++) kt.push(Math.exp(-(q * q) / 18));
+      for (let q = -6; q <= 6; q++) kr.push(Math.exp(-(q * q) / 8));
+      const A = new Float32Array(NT * NR * 3), AW = new Float32Array(NT * NR);
+      for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
+        let a0 = 0, a1 = 0, a2 = 0, w = 0;
+        for (let q = -9; q <= 9; q++) {
+          const b = (((t + q) % NT + NT) % NT) * NR + r, n = C[b];
+          if (!n) continue;
+          const wt = kt[q + 9] * n;
+          a0 += wt * S[b * 3] / n; a1 += wt * S[b * 3 + 1] / n; a2 += wt * S[b * 3 + 2] / n; w += wt;
+        }
+        const b = t * NR + r;
+        if (w > 0) { A[b * 3] = a0 / w; A[b * 3 + 1] = a1 / w; A[b * 3 + 2] = a2 / w; AW[b] = w; }
+      }
+      for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
+        let a0 = 0, a1 = 0, a2 = 0, w = 0;
+        for (let q = -6; q <= 6; q++) {
+          const rr = r + q;
+          if (rr < 0 || rr >= NR) continue;
+          const b = t * NR + rr;
+          if (!AW[b]) continue;
+          const wt = kr[q + 6] * AW[b];
+          a0 += wt * A[b * 3]; a1 += wt * A[b * 3 + 1]; a2 += wt * A[b * 3 + 2]; w += wt;
+        }
+        const b = t * NR + r;
+        if (w > 0) { P[b * 3] = a0 / w; P[b * 3 + 1] = a1 / w; P[b * 3 + 2] = a2 / w; Wt[b] = w; }
+      }
+      return { P, Wt };
+    };
+    const accum = (prof, tau) => {
+      const S = new Float64Array(NT * NR * 3), C = new Float64Array(NT * NR);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const b = binOf(x, y);
+        if (b < 0) continue;
+        const i = y * W + x, p = i * 4;
+        if (lab[i] >= HW) continue;
+        if (prof) {
+          const P = prof.P;
+          if (!prof.Wt[b] || Math.hypot(data[p] - P[b * 3], data[p + 1] - P[b * 3 + 1], data[p + 2] - P[b * 3 + 2]) > tau) continue;
+        }
+        S[b * 3] += data[p]; S[b * 3 + 1] += data[p + 1]; S[b * 3 + 2] += data[p + 2]; C[b]++;
+      }
+      return smoothProf(S, C);
+    };
+    let prof = accum(null, 0);
+    prof = accum(prof, 40);
+    prof = accum(prof, 25);
+    // Batas cahaya: kecerahan rata-rata per jarak vs langit jauh (25 % terluar).
+    const Lr = new Float64Array(NR), Lw = new Float64Array(NR);
+    for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
+      const b = t * NR + r;
+      if (!prof.Wt[b]) continue;
+      Lr[r] += 0.299 * prof.P[b * 3] + 0.587 * prof.P[b * 3 + 1] + 0.114 * prof.P[b * 3 + 2]; Lw[r]++;
+    }
+    for (let r = 0; r < NR; r++) Lr[r] = Lw[r] ? Lr[r] / Lw[r] : NaN;
+    let far = 0, fn = 0;
+    for (let r = Math.floor(NR * 0.75); r < NR; r++) if (!isNaN(Lr[r])) { far += Lr[r]; fn++; }
+    if (!fn || isNaN(Lr[0])) continue;
+    far /= fn;
+    const amp = Lr[0] - far;
+    if (amp < 10) continue; // tidak ada cahaya yang berarti
+    let RgI = NR - 1;
+    for (let r = 0; r < NR; r++) if (!isNaN(Lr[r]) && Lr[r] - far < 0.12 * amp) { RgI = r; break; }
+    const Rg = R0 + (RgI + 1) * dr;
+    out.push({ cx: d.cx, cy: d.cy, R: d.R, Rg });
+    // Tetapkan label: piksel langit di dalam batas cahaya.
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const dx = x + 0.5 - d.cx, dy = y + 0.5 - d.cy, r = Math.hypot(dx, dy);
+      if (r < R0 || r >= Rg) continue;
+      const i = y * W + x, p = i * 4;
+      if (lab[i] >= HW || comp[i] === d.comp) continue;
+      // Interpolasi profil (sudut melingkar, jarak linear).
+      const ft = ((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * NT - 0.5, fr = (r - R0) / dr - 0.5;
+      const t0 = Math.floor(ft), tt = ft - t0, r0 = Math.max(0, Math.min(NR - 1, Math.floor(fr))), r1 = Math.min(NR - 1, r0 + 1), tr = Math.max(0, Math.min(1, fr - r0));
+      let a0 = 0, a1 = 0, a2 = 0, w = 0;
+      for (const [tq, wt0] of [[t0, 1 - tt], [t0 + 1, tt]]) {
+        const tb = ((tq % NT) + NT) % NT;
+        for (const [rq, wt1] of [[r0, 1 - tr], [r1, tr]]) {
+          const b = tb * NR + rq, wt = wt0 * wt1;
+          if (!prof.Wt[b] || wt <= 0) continue;
+          a0 += wt * prof.P[b * 3]; a1 += wt * prof.P[b * 3 + 1]; a2 += wt * prof.P[b * 3 + 2]; w += wt;
+        }
+      }
+      if (!w) continue;
+      a0 /= w; a1 /= w; a2 /= w;
+      if (Math.hypot(data[p] - a0, data[p + 1] - a1, data[p + 2] - a2) > 25) continue; // benda di depan
+      if (disks.some((o2) => o2 !== d && Math.hypot(x + 0.5 - o2.cx, y + 0.5 - o2.cy) < o2.R + 2 * s)) continue;
+      // Hanya bentuk batas pita yang berubah: warna baru harus hampir sama
+      // cocoknya dengan warna piksel seperti warna lamanya.
+      const k = nearestPal(clamp255(a0), clamp255(a1), clamp255(a2)), old = lab[i];
+      if (k === old) continue;
+      rgb2lab(data[p], data[p + 1], data[p + 2], tmpLab);
+      const dk = Math.hypot(pal[k].L - tmpLab[0], pal[k].A - tmpLab[1], pal[k].B - tmpLab[2]);
+      const dold = Math.hypot(pal[old].L - tmpLab[0], pal[old].A - tmpLab[1], pal[old].B - tmpLab[2]);
+      if (dk <= dold + 6) lab[i] = k;
+    }
+  }
+  return out;
+}
+
+// Lingkaran melalui tiga titik.
+function circle3(x1, y1, x2, y2, x3, y3) {
+  const d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+  if (Math.abs(d) < 1e-9) return null;
+  const s1 = x1 * x1 + y1 * y1, s2 = x2 * x2 + y2 * y2, s3 = x3 * x3 + y3 * y3;
+  const cx = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d, cy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d;
+  return { cx, cy, R: Math.hypot(x1 - cx, y1 - cy) };
+}
+
+// Lingkaran kuadrat terkecil (Kasa) pada titik P (opsional mask m).
+function circleFit(P, m) {
+  let n = 0, mx = 0, my = 0;
+  for (let k = 0; k < P.length / 2; k++) if (!m || m[k]) { mx += P[k * 2]; my += P[k * 2 + 1]; n++; }
+  if (n < 6) return null;
+  mx /= n; my /= n;
+  let Suu = 0, Suv = 0, Svv = 0, Suuu = 0, Svvv = 0, Suvv = 0, Svuu = 0;
+  for (let k = 0; k < P.length / 2; k++) {
+    if (m && !m[k]) continue;
+    const u = P[k * 2] - mx, v = P[k * 2 + 1] - my;
+    Suu += u * u; Suv += u * v; Svv += v * v; Suuu += u * u * u; Svvv += v * v * v; Suvv += u * v * v; Svuu += v * u * u;
+  }
+  const det = Suu * Svv - Suv * Suv;
+  if (Math.abs(det) < 1e-9) return null;
+  const b1 = 0.5 * (Suuu + Suvv), b2 = 0.5 * (Svvv + Svuu);
+  const uc = (b1 * Svv - b2 * Suv) / det, vc = (Suu * b2 - Suv * b1) / det;
+  return { cx: uc + mx, cy: vc + my, R: Math.sqrt(uc * uc + vc * vc + (Suu + Svv) / n) };
+}
+
 function label(lab, W, H, comp, order) {
   const N = W * H;
   comp.fill(-1);
@@ -2793,7 +3055,8 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
     return cnt ? soft / cnt : 0;
   }
   const arcOn = o.mode === 'gradient' && o.arcSnap !== false;
-  const disks = [], pending = [];
+  // Cincin sepusat hanya di sekitar sumber cahaya yang terdeteksi glowRings.
+  const disks = o._glow || [], pending = [];
   chains.forEach((ch, i) => {
     const seq = ch.raw.open;
     const f = pickFit(ch);
@@ -2804,7 +3067,7 @@ function traceAll(lab, comp, info, W, H, s, o, whiteK, progress, data) {
     if (arcOn) {
       const P = sampleGeo(geo);
       const a = arcSnap(P, !seq, s, W, H);
-      if (a) { geo = a.geo; if (a.R >= 12 * s) disks.push(a); } else pending.push([ch, P, !seq]);
+      if (a) geo = a.geo; else if (disks.length) pending.push([ch, P, !seq]);
     }
     ch.p = geo.p; ch.c = geo.c;
     delete ch.raw;
@@ -2921,7 +3184,38 @@ function arcSnap(P, closed, s, W, H) {
   const sweep = sweepOf(P, cx, cy);
   if (sweep === null) return null;
   if (closed ? Math.abs(Math.abs(sweep) - 2 * Math.PI) > 0.3 : Math.abs(sweep) < Math.PI / 3) return null;
-  return { geo: arcGeo(P, closed, cx, cy, R, sweep), cx, cy, R };
+  const geo = arcGeo(P, closed, cx, cy, R, sweep);
+  if (!nearPath(P, geo, Math.max(1.5 * s, 0.06 * R))) return null;
+  return { geo, cx, cy, R };
+}
+
+// Pengaman snap: setiap titik kurva baru harus dekat dengan kurva lama, dan
+// sebaliknya (tidak ada busur yang berputar ke arah salah / memotong jalan).
+function nearPath(P, geo, tol) {
+  const Q = sampleGeo(geo), t2 = tol * tol;
+  const close = (A, Bp) => {
+    const nb = Bp.length / 2;
+    for (let i = 0; i < A.length; i += 2) {
+      let ok = false;
+      for (let k = 0; k < nb; k++) {
+        const dx = A[i] - Bp[k * 2], dy = A[i + 1] - Bp[k * 2 + 1];
+        if (dx * dx + dy * dy <= t2) { ok = true; break; }
+      }
+      if (!ok) return false;
+    }
+    return true;
+  };
+  // Sampel rapat (~tol/2) supaya jarak antar titik tidak menipu.
+  const dense = (A) => {
+    const o = [A[0], A[1]];
+    for (let i = 2; i < A.length; i += 2) {
+      const dx = A[i] - A[i - 2], dy = A[i + 1] - A[i - 1], n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (tol / 2)));
+      for (let j = 1; j <= n; j++) o.push(A[i - 2] + (dx * j) / n, A[i - 1] + (dy * j) / n);
+    }
+    return o;
+  };
+  const Pd = dense(P), Qd = dense(Q);
+  return close(Qd, Pd) && close(Pd, Qd);
 }
 // Busur sepusat dengan lingkaran besar terdekat: jarak titik ke pusat hampir
 // tetap (rentang persentil 10–90 <= 12 % median), di luar lingkaran itu
@@ -2935,14 +3229,16 @@ function concentricSnap(P, closed, disks, s) {
     for (let i = 0; i < n; i++) ds[i] = Math.hypot(P[i * 2] - d.cx, P[i * 2 + 1] - d.cy);
     const sorted = Float64Array.from(ds).sort();
     const med = sorted[n >> 1], lo = sorted[Math.floor(n * 0.1)], hi = sorted[Math.floor(n * 0.9)];
-    if (med < 1.05 * d.R || med > 4 * d.R) continue;
+    if (med < 1.05 * d.R || med > (d.Rg || 4 * d.R) + 2 * s) continue;
     const spread = (hi - lo) / med;
     if (spread > 0.15 || (best && spread >= best.spread)) continue;
     const sweep = sweepOf(P, d.cx, d.cy, 0.15, (4 * s) / med);
     if (sweep === null || (closed ? Math.abs(Math.abs(sweep) - 2 * Math.PI) > 0.4 : Math.abs(sweep) < Math.PI / 4)) continue;
     best = { spread, d, med, sweep };
   }
-  return best ? arcGeo(P, closed, best.d.cx, best.d.cy, best.med, best.sweep) : null;
+  if (!best) return null;
+  const geo = arcGeo(P, closed, best.d.cx, best.d.cy, best.med, best.sweep);
+  return nearPath(P, geo, Math.max(2 * s, 0.06 * best.med)) ? geo : null;
 }
 
 function polyArea(V, W1) {
