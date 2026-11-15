@@ -208,7 +208,7 @@ async function vectorize(file, o, progress, aiMask) {
   if (clean && o.verify !== false) verifyRegions(lab, data, W, H, pal, s, comp, order);
   // Batas yang di gambar asli hanyalah gradasi (tanpa garis tegas) tidak dibuat
   // menjadi garis: bercak di dalam gradasi dilebur ke tetangganya.
-  if (clean && o.softMerge !== false) mergeSoft(lab, data, W, H, pal, s, comp, order, o.softMergeArea ?? 0.006, o.softMergeDE ?? 16, o.softMergeFrac ?? 0.8);
+  if (clean && o.softMerge !== false) mergeSoft(lab, data, W, H, pal, s, comp, order, o.softMergeArea ?? 0.006, o.softMergeDE ?? 16, o.softMergeFrac ?? 0.8, o.softNearDE ?? 12, o.softNearFrac ?? 0.4);
   // Warna antara yang bedanya sangat tipis dengan tetangganya dianggap sama.
   if (clean && (o.stepDE ?? 8) > 0) mergeSteps(lab, W, H, pal, comp, order, o.stepDE ?? 8);
   // Penyederhanaan menurut kekuatan tepi: bercak (bayangan lembut, gradasi
@@ -1769,7 +1769,7 @@ function mergeWeak(lab, data, W, H, pal, s, comp, order, maxEdge = 26, maxDE = 8
 function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
   const N = W * H;
   const dE = (a, b) => Math.hypot(pal[a].L - pal[b].L, pal[a].A - pal[b].A, pal[a].B - pal[b].B);
-  for (let pass = 0; pass < 2; pass++) {
+  for (let pass = 0; pass < 3; pass++) {
     const info = label(lab, W, H, comp, order);
     const n = info.count;
     const adj = new Map();
@@ -1779,12 +1779,17 @@ function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
       if (x < W - 1 && comp[i + 1] !== c) { add(c, comp[i + 1]); add(comp[i + 1], c); }
       if (i < N - W && comp[i + W] !== c) { add(c, comp[i + W]); add(comp[i + W], c); }
     }
+    // Bentuk kecil dulu. Bentuk yang dilebur tidak boleh sekaligus menjadi tujuan
+    // peleburan bentuk lain di putaran yang sama (dan sebaliknya) — kalau tidak,
+    // warnanya muncul lagi lewat bentuk yang dilebur ke dalamnya.
+    const ids = Array.from({ length: n }, (_, c) => c).sort((a, b) => info.size[a] - info.size[b]);
+    const moved = new Uint8Array(n), frozen = new Uint8Array(n);
     const target = new Int32Array(n).fill(-1);
     let changed = 0;
-    for (let c = 0; c < n; c++) {
+    for (const c of ids) {
       const C = info.lbl[c];
       const m = adj.get(c);
-      if (C >= HW || !m) continue;
+      if (C >= HW || !m || frozen[c]) continue;
       // Panjang batas dan bentuk terbesar per warna tetangga. Bentuk perantara
       // harus lebih kecil dari tetangga di kedua sisinya (pita, bukan bidang utama).
       const per = new Map(), big = new Map();
@@ -1793,10 +1798,11 @@ function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
         total += k;
         const l = info.lbl[q];
         per.set(l, (per.get(l) || 0) + k);
-        big.set(l, Math.max(big.get(l) || 0, info.size[q]));
+        const b = big.get(l);
+        if (b === undefined || info.size[q] > info.size[b]) big.set(l, q);
       }
       const own = info.size[c];
-      const cols = [...per].filter(([l, k]) => l < HW && l !== C && k >= 0.15 * total && big.get(l) > own).map(([l]) => l);
+      const cols = [...per].filter(([l, k]) => l < HW && l !== C && k >= 0.15 * total && info.size[big.get(l)] > own).map(([l]) => l);
       let best = -1, bd = Infinity;
       for (let u = 0; u < cols.length; u++) {
         for (let v = u + 1; v < cols.length; v++) {
@@ -1807,7 +1813,11 @@ function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
           if (d <= maxDE && d < bd) { bd = d; best = near; }
         }
       }
-      if (best >= 0) { target[c] = best; changed++; }
+      if (best < 0) continue;
+      const t = big.get(best);
+      if (moved[t]) continue;
+      target[c] = best; moved[c] = 1; frozen[t] = 1;
+      changed++;
     }
     if (!changed) break;
     for (let c = 0; c < n; c++) {
@@ -1823,7 +1833,10 @@ function mergeSteps(lab, W, H, pal, comp, order, maxDE) {
 // butir, kilau) berubah penuh dalam jarak itu; batas pita gradasi hanya sedikit.
 // Pasangan yang sebagian besar batasnya gradasi dan warnanya mirip digabung
 // (bentuk lebih kecil ke yang lebih besar, dibatasi luas).
-function mergeSoft(lab, data, W, H, pal, s, comp, order, areaFrac, maxDE, minFrac) {
+// Warna yang bedanya tipis (dE <= nearDE) cukup berbatas lembut sebagian
+// (>= nearFrac): bercak cahaya samar di dalam satu bidang. Detail bertepi tegas
+// (butir nasi: hanya ~10 % batasnya lembut) tidak tersentuh.
+function mergeSoft(lab, data, W, H, pal, s, comp, order, areaFrac, maxDE, minFrac, nearDE = 0, nearFrac = 1) {
   const N = W * H;
   const info = label(lab, W, H, comp, order);
   const n = info.count;
@@ -1862,7 +1875,7 @@ function mergeSoft(lab, data, W, H, pal, s, comp, order, areaFrac, maxDE, minFra
   for (const [key, v] of pairs) {
     if (v[0] < 4) continue;
     const fr = v[1] / v[0];
-    if (fr >= minFrac) list.push([fr, Math.floor(key / n), key % n]);
+    if (fr >= Math.min(minFrac, nearFrac)) list.push([fr, Math.floor(key / n), key % n]);
   }
   list.sort((p, q) => q[0] - p[0]);
   const par = Int32Array.from({ length: n }, (_, i) => i);
@@ -1871,9 +1884,11 @@ function mergeSoft(lab, data, W, H, pal, s, comp, order, areaFrac, maxDE, minFra
   const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
   const cap = areaFrac * N;
   let merged = 0;
-  for (const [, a0, b0] of list) {
+  for (const [fr, a0, b0] of list) {
     const a = find(a0), b = find(b0);
-    if (a === b || col[a] >= HW || col[b] >= HW || dE(col[a], col[b]) > maxDE) continue;
+    if (a === b || col[a] >= HW || col[b] >= HW) continue;
+    const d = dE(col[a], col[b]);
+    if (d > maxDE || fr < (d <= nearDE ? nearFrac : minFrac)) continue;
     const big = area[a] >= area[b] ? a : b, small = big === a ? b : a;
     if (area[small] > cap) continue;
     par[small] = big; area[big] += area[small];
