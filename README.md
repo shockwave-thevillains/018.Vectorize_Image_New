@@ -85,6 +85,21 @@ JavaScript lama dari cache GitHub Pages. Saat mengubah file, perbarui angka vers
 2. *Source*: **Deploy from a branch**. Pilih branch ini, folder **/ (root)**, lalu **Save**.
 3. Situs akan aktif di `https://<user>.github.io/<nama-repo>/`.
 
+## Branch dan perbedaannya
+
+Semua branch berasal dari satu riwayat, jadi tiap branch cadangan adalah gambaran kondisi aplikasi
+pada satu titik. Untuk kembali ke versi tertentu, ambil branch-nya (`git checkout backupN`) atau
+pilih branch itu di *Settings → Pages* untuk dideploy.
+
+| Branch | Commit | Kondisi |
+| --- | --- | --- |
+| `backup1` | `a9061ea` | **Sebelum mesin kurva baru.** Tema terang/gelap, tombol bantuan (?), tombol Default, dan perbaikan sedotan sudah ada. Kurva memakai fitting lama; belum ada alat sunting, pengisi celah di pratinjau, maupun verifikasi bentuk. |
+| `backup2` | `e5256f2` | **Mode Warna disempurnakan, sebelum mode Gradien diperbaiki.** Menambah mesin kurva sub-piksel gaya Potrace, alat sunting (Hapus, Gabung, Warnai) tanpa proses ulang, pengisi celah (garis putih di sambungan hilang), peleburan warna yang hampir sama, tombol sembunyikan panel (tombol P), pratinjau hasil di antrean, serta bawaan mode Warna latar Magenta dan ΔE 17. Mode Gradien masih versi lama dan latar bawaannya Putih. |
+| `backup3` | `06411dc` | **Mode Gradien diperbaiki.** Menambah gerbang kata sandi, latar bawaan mode Gradien *Tanpa*, cahaya bulan/matahari berupa cincin sepusat yang meredup, lingkaran dan busur sempurna, deteksi outline gelap lebih tebal (garis gunung tidak hilang), serta sambungan garis yang rapi. Mode Warna dan Siluet sama dengan `backup2`. |
+| `claude/lucid-allen-esni3r` | terbaru | **Branch kerja.** Selalu berisi kondisi paling baru; saat ini sama dengan `backup3` dan akan berubah seiring pekerjaan berikutnya. |
+
+Catatan: `backup1`–`backup3` tidak ikut berubah setelah dibuat. Perubahan baru hanya masuk ke branch kerja.
+
 ## Struktur
 
 | File | Isi |
